@@ -519,3 +519,8 @@ elseif(WIN32)
         message(STATUS "Python3 not found; skipping stable-hash PE cleaning")
     endif()
 endif()
+
+# Linux: SDK headers include <imgui.h>, but the game target does not inherit the path
+if(NOT WIN32)
+    target_include_directories(fable_2 SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk/thirdparty/imgui")
+endif()
