@@ -155,7 +155,7 @@ higher_hf_tick_rate = false
 # untouched. The log shows "[motion-blur] game requested ..." the first time
 # the game asks for blur. false = blur as in the original game.
 # Default: false
-disable_motion_blur = false
+disable_motion_blur = true
 
 
 # Realtime Texture Morphing (mid-asm hook fable2_hook_realtime_texture_morphing):
