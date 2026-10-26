@@ -11,10 +11,11 @@ cd "$ROOT" || exit 1
 
 # The code generator reads default.xex from the project folder. Link it from FABLE2_GAME_DIR if needed.
 GAME=${FABLE2_GAME_DIR:-$ROOT}
-if [ ! -f "$ROOT/default.xex" ]; then
+if [ ! -f "$ROOT/default.xex" ] || [ -L "$ROOT/default.xex" ]; then
   [ -f "$GAME/default.xex" ] || { echo "[build] default.xex not found. Put your game files in a folder and set FABLE2_GAME_DIR to it (see LINUX.md)."; exit 1; }
-  ln -s "$GAME/default.xex" "$ROOT/default.xex" || exit 1
-  echo "[build] linked $GAME/default.xex"
+  rm -f "$ROOT/default.xex"
+  cp "$GAME/default.xex" "$ROOT/default.xex" || exit 1   # a copy, not a link: codegen rejects paths outside the project
+  echo "[build] copied $GAME/default.xex"
 fi
 
 if [ ! -f "$B/build.ninja" ]; then
