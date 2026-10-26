@@ -32,6 +32,7 @@
 #include "fable2_config.h"
 #include "fable2_patches.h"
 #include "fable2_launcher_menu.h"
+#include "fable2_fps_counter.h"
 // #include "fable2_deadbeef_overlay.h"
 // 30fps-cap instrumentation (writes fps_probe.log next to the exe). Disabled
 // now that the cap is lifted via REX_VSYNC=0 (see tools/fable2-uncapped.cmd).
@@ -381,6 +382,7 @@ class Fable2App : public rex::ReXApp {
   // Stop the state classifier thread, then the remote control server threads,
   // before anything else tears down.
   void OnShutdown() override {
+    fps_counter_.reset();
     fable2::stateprobe::stop();
     remote_server_.Stop();
   }
@@ -573,6 +575,11 @@ class Fable2App : public rex::ReXApp {
   }
   // Pre-launch settings menu. Shown inside the game window (SDK ImGui overlay)
   // before the runtime/GPU are constructed, so every choice applies this run.
+  std::unique_ptr<rex::ui::ImGuiDialog> fps_counter_;
+#ifndef FABLE2_REMOTE_CONTROL
+  void OnShutdown() override { fps_counter_.reset(); }
+#endif
+
   std::optional<rex::PathConfig> OnFinalizePaths(
       const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
     if (!fable2::launcher_menu::Enabled() || !imgui_drawer() || !window()) {
@@ -597,6 +604,12 @@ class Fable2App : public rex::ReXApp {
                 fable2::launcher_menu::detail::Norm(rex::cvar::GetFlagByName("fullscreen")) ==
                 "true";
             if (want_fullscreen != was_fullscreen) window()->SetFullscreen(want_fullscreen);
+            if (const int m = fable2::launcher_menu::FpsMode(); m > 0) {
+              fps_counter_ = std::make_unique<fable2::FpsCounterDialog>(
+                  imgui_drawer(), m == 2, []() -> double {
+                    return double(rex::perf::GetSnapshotCounter(rex::perf::CounterId::kFrameTimeUs));
+                  });
+            }
             fable2::launcher_menu::SignalGo();
             resume(defaults);
           });

@@ -86,6 +86,10 @@ inline bool Enabled() {
   return detail::Norm(rex::cvar::GetFlagByName("launcher")) != "false";
 }
 
+// 0 = off, 1 = simple, 2 = detailed. Read by Fable2App after Apply().
+inline int g_fps_mode = 0;
+inline int FpsMode() { return g_fps_mode; }
+
 inline launcher::Item* Find(std::vector<launcher::Item>& v, const std::string& key) {
   for (auto& it : v)
     if (it.key == key) return &it;
@@ -152,6 +156,13 @@ inline std::vector<launcher::Item> BuildItems(const std::filesystem::path& save_
     it.apply = [](const std::string& v) { fable2::config::SetDisableMotionBlur(v == "off"); };
     items.push_back(std::move(it));
   }
+  {
+    Item it{"fps_counter", "FPS counter",
+            "Shows the game's frame rate (and the display's) in the corner of the screen. Detailed adds the frame time in milliseconds.",
+            {{"Off", "off"}, {"On", "on"}, {"Detailed", "detailed"}}, 0};
+    it.apply = [](const std::string& v) { g_fps_mode = (v == "on") ? 1 : (v == "detailed") ? 2 : 0; };
+    items.push_back(std::move(it));
+  }
   items.push_back({"fullscreen", "Fullscreen", "Play fullscreen or in a window.",
        {{"On", "true"}, {"Off", "false"}}, 1});
   items.push_back({"vsync", "VSync",
@@ -187,6 +198,8 @@ inline std::vector<launcher::Item> BuildItems(const std::filesystem::path& save_
       want = fable2::config::Get().disable_motion_blur ? "off" : "on";
     } else if (it.key == "preset") {
       want = "custom";
+    } else if (it.key == "fps_counter") {
+      want = "off";
     } else {
       want = cur(it.key.c_str());
     }
