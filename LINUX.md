@@ -30,6 +30,9 @@ A C++20 toolchain and the usual Vulkan/desktop development packages. On Fedora:
 sudo dnf install clang lld cmake ninja-build git vulkan-loader-devel mesa-vulkan-drivers
 ```
 
+On Debian/Ubuntu the preset's `clang-20` is used if installed; otherwise any recent `clang` works (the build script picks
+whichever it finds). Set `FABLE2_MARCH=-march=native` to tune for your own CPU (default: `-march=x86-64-v2`).
+
 The SDK builds SDL3 and its other libraries itself; if the configure step names a missing system
 package (X11/Wayland, ALSA/PulseAudio headers and similar), install it and re-run.
 

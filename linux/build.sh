@@ -10,8 +10,18 @@ cd "$ROOT" || exit 1
 [ -f thirdparty/rexglue-sdk/CMakeLists.txt ] || { echo "[build] SDK submodule missing. Run: git submodule update --init --recursive"; exit 1; }
 
 if [ ! -f "$B/CMakeCache.txt" ]; then
-  echo "[build] configuring ($PRESET)"
-  cmake --preset "$PRESET" -DREXGLUE_ENABLE_FIDELITYFX=OFF || exit 1
+  # The preset asks for clang-20 / clang++-20 (Debian/Ubuntu names). Fall back to plain clang elsewhere (Fedora, Arch...).
+  if command -v clang++-20 >/dev/null 2>&1 && command -v clang-20 >/dev/null 2>&1; then CC=clang-20; CXX=clang++-20; else CC=clang; CXX=clang++; fi
+  command -v "$CXX" >/dev/null 2>&1 || { echo "[build] clang not found. Install clang and lld (see LINUX.md)."; exit 1; }
+  command -v ninja >/dev/null 2>&1 || { echo "[build] ninja not found. Install ninja (ninja-build) (see LINUX.md)."; exit 1; }
+  MARCH=${FABLE2_MARCH:--march=x86-64-v2}      # the tested baseline; set FABLE2_MARCH=-march=native to tune for your CPU
+  echo "[build] configuring ($PRESET) with $CXX $MARCH"
+  cmake --preset "$PRESET" \
+    -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+    -DCMAKE_C_FLAGS="$MARCH" -DCMAKE_CXX_FLAGS="$MARCH" \
+    -DFABLE2_BUILD_PROFILE=goty-compatible \
+    -DREXGLUE_ENABLE_FIDELITYFX=OFF -DREXGLUE_ENABLE_PERF_COUNTERS=ON \
+    || exit 1
 fi
 
 # Guard: a stale FidelityFX path in the cache compiles the SDK library with REX_HAS_FIDELITYFX_SDK
