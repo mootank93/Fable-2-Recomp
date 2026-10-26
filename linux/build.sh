@@ -18,6 +18,10 @@ if [ ! -f "$ROOT/default.xex" ] || [ -L "$ROOT/default.xex" ]; then
   echo "[build] copied $GAME/default.xex"
 fi
 
+# On a fresh clone generated/default/ is created by the first build step, after CMake has configured,
+# so its include path is missing. We detect that below and configure once more.
+GEN_BEFORE=0; [ -d "$ROOT/generated/default" ] && GEN_BEFORE=1
+
 if [ ! -f "$B/build.ninja" ]; then
   # The preset asks for clang-20 / clang++-20 (Debian/Ubuntu names). Fall back to plain clang elsewhere (Fedora, Arch...).
   if command -v clang++-20 >/dev/null 2>&1 && command -v clang-20 >/dev/null 2>&1; then CC=clang-20; CXX=clang++-20; else CC=clang; CXX=clang++; fi
@@ -42,8 +46,12 @@ if grep -q "^REXGLUE_FIDELITYFX_SOURCE_DIR:INTERNAL=." "$B/CMakeCache.txt" 2>/de
 fi
 
 LOG=$B/build.log
-cmake --build "$B" --parallel "${JOBS:-$(nproc)}" > "$LOG" 2>&1
-rc=$?
+build() { cmake --build "$B" --parallel "${JOBS:-$(nproc)}" > "$LOG" 2>&1; }
+build; rc=$?
+if [ "$rc" != "0" ] && [ "$GEN_BEFORE" = 0 ] && [ -d "$ROOT/generated/default" ]; then
+  echo "[build] game sources generated; reconfiguring and continuing"
+  cmake -S . -B "$B" > /dev/null 2>&1 && { build; rc=$?; }
+fi
 if [ "$rc" != "0" ]; then
   echo "[build] FAILED. Errors:"
   grep -E -B1 -A6 'FAILED:|error:|Failed:|undefined reference' "$LOG" | head -40
