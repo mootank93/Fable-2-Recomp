@@ -438,6 +438,8 @@ bool Load(const std::filesystem::path& path) {
 
 const Values& Get() { return g_values; }
 
+void SetDisableMotionBlur(bool disable) { g_values.disable_motion_blur = disable; }
+
 const char* DefaultTemplate() { return kTemplate; }
 
 }  // namespace fable2::config

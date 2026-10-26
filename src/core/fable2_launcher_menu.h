@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -24,7 +25,9 @@
 #include <unistd.h>
 #endif
 
+#include "fable2_config.h"
 #include "fable2_launcher_dialog.h"
+#include "fable2_saves.h"
 
 namespace fable2::launcher_menu {
 namespace detail {
@@ -83,49 +86,128 @@ inline bool Enabled() {
   return detail::Norm(rex::cvar::GetFlagByName("launcher")) != "false";
 }
 
-inline std::vector<launcher::Item> BuildItems() {
+inline launcher::Item* Find(std::vector<launcher::Item>& v, const std::string& key) {
+  for (auto& it : v)
+    if (it.key == key) return &it;
+  return nullptr;
+}
+inline void Pick(std::vector<launcher::Item>& v, const std::string& key, const std::string& value) {
+  if (auto* it = Find(v, key))
+    for (size_t i = 0; i < it->choices.size(); ++i)
+      if (it->choices[i].value == value) it->selected = int(i);
+}
+
+// Frame rate -> cvars. 30 = the original lock; 60/120 = host limiter with the
+// guest's 30 fps vblank lock removed; native = no limiter (VSync caps it at the
+// display's refresh rate).
+inline void ApplyFrameRate(const std::string& v) {
+  const bool locked = (v == "30");
+  rex::cvar::SetFlagByName("guest_vblank_pacing", locked ? "true" : "false");
+  rex::cvar::SetFlagByName("frame_limit", (v == "native") ? "0" : v);
+}
+
+inline std::vector<launcher::Item> BuildItems(const std::filesystem::path& save_root = {}) {
   using launcher::Item;
-  std::vector<Item> items = {
-      {"resolution_scale", "Render scale",
-       "Internal render resolution multiplier. Higher is sharper but much heavier on the GPU.",
+  const auto saved = detail::LoadSaved(ExeDir() / "fable2_launcher.conf");
+  auto cur = [](const char* k) { return detail::Norm(rex::cvar::GetFlagByName(k)); };
+
+  std::vector<Item> items;
+  {
+    Item it{"preset", "Preset",
+            "Original (Xbox 360) matches the console release. Enhanced is a good starting point for a modern PC. Changing any row below switches this back to Custom.",
+            {{"Custom", "custom"}, {"Original (Xbox 360)", "original"}, {"Enhanced", "enhanced"}}, 0};
+    it.on_change = [](std::vector<Item>& v) {
+      auto* p = Find(v, "preset");
+      if (!p) return;
+      const std::string& s = p->choices[p->selected].value;
+      if (s == "original") {
+        Pick(v, "resolution_scale", "1"); Pick(v, "anisotropic_override", "0");
+        Pick(v, "frame_rate", "30"); Pick(v, "motion_blur", "on"); Pick(v, "vsync", "true");
+      } else if (s == "enhanced") {
+        Pick(v, "resolution_scale", "2"); Pick(v, "anisotropic_override", "5");
+        Pick(v, "frame_rate", "30"); Pick(v, "motion_blur", "off"); Pick(v, "vsync", "true");
+      }
+    };
+    items.push_back(std::move(it));
+  }
+  items.push_back({"resolution_scale", "Render scale",
+       "Internal render resolution. Higher is sharper but much heavier on the GPU.",
        {{"720p (1280x720)", "1"}, {"1440p (2560x1440)", "2"}, {"4K (3840x2160)", "3"}, {"5K (5120x2880) - very heavy", "4"}},
-       0},
-      {"anisotropic_override", "Anisotropic filtering",
+       0});
+  items.push_back({"anisotropic_override", "Anisotropic filtering",
        "Keeps textures sharp at oblique angles (floors, roads). Costs very little on modern GPUs.",
        {{"Off", "0"}, {"2x", "2"}, {"4x", "3"}, {"8x", "4"}, {"16x", "5"}},
-       2},
-      {"fullscreen", "Fullscreen", "Play fullscreen or in a window.",
-       {{"On", "true"}, {"Off", "false"}}, 1},
-      {"vsync", "VSync",
-       "Syncs to the display refresh rate. Turn off to uncap the frame rate (may tear).",
-       {{"On", "true"}, {"Off", "false"}}, 0},
-  };
-  const auto saved = detail::LoadSaved(ExeDir() / "fable2_launcher.conf");
+       2});
+  {
+    Item it{"frame_rate", "Frame rate",
+            "30 is the original lock. 60 / 120 / Display refresh remove it (experimental: game speed is still being verified). Display refresh follows your monitor when VSync is on.",
+            {{"30 (original)", "30"}, {"60", "60"}, {"120", "120"}, {"Display refresh", "native"}}, 0};
+    it.apply = ApplyFrameRate;
+    items.push_back(std::move(it));
+  }
+  {
+    Item it{"motion_blur", "Motion blur",
+            "The game's full-screen camera blur. Off removes it entirely.",
+            {{"On (original)", "on"}, {"Off", "off"}}, 0};
+    it.apply = [](const std::string& v) { fable2::config::SetDisableMotionBlur(v == "off"); };
+    items.push_back(std::move(it));
+  }
+  items.push_back({"fullscreen", "Fullscreen", "Play fullscreen or in a window.",
+       {{"On", "true"}, {"Off", "false"}}, 1});
+  items.push_back({"vsync", "VSync",
+       "Tear-free display sync. Turn off to uncap the frame rate (may tear).",
+       {{"On", "true"}, {"Off", "false"}}, 0});
+
+  if (!save_root.empty()) {
+    auto dir = std::make_shared<std::string>();
+    if (auto s = saved.find("saves_dir"); s != saved.end()) *dir = s->second;
+    Item sd{"saves_dir", "Save folder",
+            "Where Export / Import look for the saves zip. Press Enter, type a path (~ means your home folder), Enter again. Empty = ~/Fable2-Saves.",
+            {}, 0, nullptr, dir};
+    Item ex{"", "Export saves", "Zips your saves into the save folder above, ready to copy to another device.",
+            {}, 0, [save_root, dir] { return saves::DoExport(save_root, *dir); }};
+    Item im{"", "Import saves",
+            "Loads the newest .zip from the save folder above (your current saves are backed up first).",
+            {}, 0, [save_root, dir] { return saves::DoImport(save_root, *dir); }};
+    items.push_back(std::move(sd));
+    items.push_back(std::move(ex));
+    items.push_back(std::move(im));
+  }
+
+  // Initial selections: saved choice, else current state.
   for (auto& it : items) {
+    if (it.choices.empty()) continue;
     std::string want;
     if (auto s = saved.find(it.key); s != saved.end()) {
       want = detail::Norm(s->second);
+    } else if (it.key == "frame_rate") {
+      const std::string lim = cur("frame_limit");
+      want = (cur("guest_vblank_pacing") != "false") ? "30" : (lim == "60" || lim == "120") ? lim : "native";
+    } else if (it.key == "motion_blur") {
+      want = fable2::config::Get().disable_motion_blur ? "off" : "on";
+    } else if (it.key == "preset") {
+      want = "custom";
     } else {
-      want = detail::Norm(rex::cvar::GetFlagByName(it.key));
+      want = cur(it.key.c_str());
     }
-    for (size_t i = 0; i < it.choices.size(); ++i) {
-      if (detail::Norm(it.choices[i].value) == want) {
-        it.selected = int(i);
-        break;
-      }
-    }
+    for (size_t i = 0; i < it.choices.size(); ++i)
+      if (detail::Norm(it.choices[i].value) == want) { it.selected = int(i); break; }
   }
   return items;
 }
 
-// Applies and saves the chosen values. Returns the value chosen for `key`.
+// Applies and saves the chosen values.
 inline void Apply(const std::vector<launcher::Item>& items) {
   std::ofstream out(ExeDir() / "fable2_launcher.conf", std::ios::trunc);
   out << "# Written by the Fable II launch menu. Delete this file to reset it.\n";
   for (const auto& it : items) {
-    if (it.choices.empty()) continue;
+    if (it.text) { out << it.key << '=' << *it.text << '\n'; continue; }
+    if (it.choices.empty() || it.key.empty()) continue;
     const std::string& v = it.choices[it.selected].value;
-    if (!rex::cvar::SetFlagByName(it.key, v)) {
+    if (it.apply) {
+      it.apply(v);
+      REXSYS_INFO("[launcher] {} = '{}'", it.key, v);
+    } else if (!rex::cvar::SetFlagByName(it.key, v)) {
       REXSYS_WARN("[launcher] cvar {} rejected value '{}'", it.key, v);
     } else {
       REXSYS_INFO("[launcher] {} = '{}'", it.key, v);

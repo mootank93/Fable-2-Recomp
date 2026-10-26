@@ -580,7 +580,7 @@ class Fable2App : public rex::ReXApp {
       return defaults;
     }
     new fable2::launcher::LauncherDialog(
-        imgui_drawer(), "Fable II", fable2::launcher_menu::BuildItems(),
+        imgui_drawer(), "Fable II", fable2::launcher_menu::BuildItems(defaults.user_data_root),
         [this, defaults, resume](bool start, const std::vector<fable2::launcher::Item>& items) {
           // The dialog is mid-draw; continue from a clean UI-thread turn.
           app_context().CallInUIThreadDeferred([this, defaults, resume, start, items]() {

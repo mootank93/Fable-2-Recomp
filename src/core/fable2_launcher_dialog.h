@@ -21,7 +21,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,6 +41,18 @@ struct Item {
   std::string help;   // one-line explanation
   std::vector<Choice> choices;
   int selected = 0;
+  // Optional: an action row (no choices). Runs on Enter / A / click and returns a
+  // one-line status that the menu shows.
+  std::function<std::string()> action;
+  // Optional: an editable text row (no choices). The string is shared with the
+  // caller, so edits are visible to action callbacks immediately.
+  std::shared_ptr<std::string> text;
+  // Optional: applies the chosen value on Start (for settings that map to more
+  // than one cvar, or to something that isn't a cvar).
+  std::function<void(const std::string&)> apply;
+  // Optional: called after the player changes this row (used by presets to move
+  // other rows).
+  std::function<void(std::vector<Item>&)> on_change;
 };
 
 class LauncherDialog final : public rex::ui::ImGuiDialog {
@@ -65,8 +79,11 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   void OnDraw(ImGuiIO& io) override {
     if (finished_) return;  // Close() is pending; draw nothing more.
 
-    Actions a = ReadKeyboard();
-    MergePad(a);
+    Actions a;
+    if (!editing_) {
+      a = ReadKeyboard();
+      MergePad(a);
+    }
 
     const int rows = int(items_.size()) + 2;  // + Start, Quit
     const int kStart = int(items_.size());
@@ -75,8 +92,10 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     if (row_ < kStart) {
       auto& it = items_[row_];
       const int n = int(it.choices.size());
-      if (n > 0 && a.left) it.selected = (it.selected + n - 1) % n;
-      if (n > 0 && (a.right || a.accept)) it.selected = (it.selected + 1) % n;
+      if (it.action && a.accept) status_ = it.action();
+      if (it.text && a.accept) { editing_ = true; focus_edit_ = true; }
+      if (n > 0 && a.left) { it.selected = (it.selected + n - 1) % n; Changed(row_); }
+      if (n > 0 && (a.right || a.accept)) { it.selected = (it.selected + 1) % n; Changed(row_); }
     } else if (a.accept) {
       Finish(row_ == kStart);
       return;
@@ -130,22 +149,48 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
       const ImVec2 p = ImGui::GetCursorPos();
       if (ImGui::Selectable("##row", sel, 0, ImVec2(inner_w, row_h))) {
         row_ = i;
+        if (items_[i].action) status_ = items_[i].action();
+        if (items_[i].text) { editing_ = true; focus_edit_ = true; }
         const int n = int(items_[i].choices.size());
         // Click the right half to change the value forward, left half selects.
-        if (n > 0 && ImGui::GetMousePos().x > ImGui::GetWindowPos().x + panel_w * 0.5f)
+        if (n > 0 && ImGui::GetMousePos().x > ImGui::GetWindowPos().x + panel_w * 0.5f) {
           items_[i].selected = (items_[i].selected + 1) % n;
+          Changed(i);
+        }
       }
       if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
         row_ = i;
         const int n = int(items_[i].choices.size());
-        if (n > 0) items_[i].selected = (items_[i].selected + n - 1) % n;
+        if (n > 0) { items_[i].selected = (items_[i].selected + n - 1) % n; Changed(i); }
       }
       ImGui::SetCursorPos(ImVec2(p.x + 8 * s, p.y + (row_h - ImGui::GetTextLineHeight()) * 0.5f));
       ImGui::TextColored(sel ? gold : grey, "%s", items_[i].label.c_str());
-      std::string v = items_[i].choices.empty()
+      if (items_[i].text && editing_ && sel) {
+        // Inline editor replaces the value text while editing.
+        ImGui::SetCursorPos(ImVec2(p.x + inner_w * 0.32f, p.y));
+        ImGui::SetNextItemWidth(inner_w * 0.66f);
+        if (focus_edit_) { ImGui::SetKeyboardFocusHere(); focus_edit_ = false; }
+        char buf[1024];
+        std::snprintf(buf, sizeof buf, "%s", items_[i].text->c_str());
+        if (ImGui::InputText("##edit", buf, sizeof buf, ImGuiInputTextFlags_EnterReturnsTrue)) {
+          *items_[i].text = buf;
+          editing_ = false;
+        } else {
+          *items_[i].text = buf;
+          if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) editing_ = false;
+        }
+        ImGui::SetCursorPos(ImVec2(p.x, p.y + row_h + 2 * s));
+        ImGui::PopID();
+        continue;
+      }
+      std::string v = items_[i].text ? (items_[i].text->empty() ? std::string("(default)") : *items_[i].text)
+                      : items_[i].action ? std::string("[ Enter ]")
+                      : items_[i].choices.empty()
                           ? std::string("-")
                           : items_[i].choices[items_[i].selected].label;
-      if (sel) v = "<  " + v + "  >";
+      if (sel && !items_[i].action && !items_[i].text) v = "<  " + v + "  >";
+      const float max_vw = inner_w * 0.62f;
+      while (v.size() > 8 && ImGui::CalcTextSize(v.c_str()).x > max_vw) v.erase(v.begin(), v.begin() + 4), v.replace(0, 3, "...");
       const float vw = ImGui::CalcTextSize(v.c_str()).x;
       ImGui::SetCursorPos(ImVec2(p.x + inner_w - vw - 8 * s,
                                  p.y + (row_h - ImGui::GetTextLineHeight()) * 0.5f));
@@ -181,6 +226,10 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
                                                      : (row_ == kStart ? "Launch Fable II with these settings."
                                                                        : "Close without starting.");
       ImGui::PushTextWrapPos(ImGui::GetWindowWidth() - 28 * s);
+      if (!status_.empty()) {
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.55f, 1.0f), "%s", status_.c_str());
+        ImGui::Dummy(ImVec2(0, 4 * s));
+      }
       ImGui::TextColored(ImVec4(0.65f, 0.63f, 0.58f, 1.0f), "%s", help.c_str());
       ImGui::PopTextWrapPos();
       ImGui::Dummy(ImVec2(0, 4 * s));
@@ -263,6 +312,16 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   void MergePad(Actions&) {}
 #endif
 
+  // A row changed: run its hook, or (for any other row) flip the preset back to Custom.
+  void Changed(int idx) {
+    if (items_[idx].on_change) {
+      items_[idx].on_change(items_);
+    } else if (items_[idx].key != "preset") {
+      for (auto& it : items_)
+        if (it.key == "preset") it.selected = 0;
+    }
+  }
+
   void Finish(bool start) {
     if (finished_) return;
     finished_ = true;
@@ -274,6 +333,9 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   std::vector<Item> items_;
   DoneFn done_;
   int row_ = 0;
+  std::string status_;
+  bool editing_ = false;
+  bool focus_edit_ = false;
   bool finished_ = false;
 
 #ifdef FABLE2_LAUNCHER_HAS_SDL

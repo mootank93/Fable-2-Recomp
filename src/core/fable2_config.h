@@ -220,6 +220,8 @@ bool Load(const std::filesystem::path& path);
 
 // Parsed values (in-memory defaults until Load() succeeds).
 const Values& Get();
+// Used by the launch menu to toggle motion blur before the game starts.
+void SetDisableMotionBlur(bool disable);
 
 // The default template written when the file is missing. Must match
 // config/fable2_config.toml in the repo (staged next to the exe by the build).
