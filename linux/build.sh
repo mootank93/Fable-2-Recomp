@@ -9,6 +9,14 @@ cd "$ROOT" || exit 1
 
 [ -f thirdparty/rexglue-sdk/CMakeLists.txt ] || { echo "[build] SDK submodule missing. Run: git submodule update --init --recursive"; exit 1; }
 
+# The code generator reads default.xex from the project folder. Link it from FABLE2_GAME_DIR if needed.
+GAME=${FABLE2_GAME_DIR:-$ROOT}
+if [ ! -f "$ROOT/default.xex" ]; then
+  [ -f "$GAME/default.xex" ] || { echo "[build] default.xex not found. Put your game files in a folder and set FABLE2_GAME_DIR to it (see LINUX.md)."; exit 1; }
+  ln -s "$GAME/default.xex" "$ROOT/default.xex" || exit 1
+  echo "[build] linked $GAME/default.xex"
+fi
+
 if [ ! -f "$B/build.ninja" ]; then
   # The preset asks for clang-20 / clang++-20 (Debian/Ubuntu names). Fall back to plain clang elsewhere (Fedora, Arch...).
   if command -v clang++-20 >/dev/null 2>&1 && command -v clang-20 >/dev/null 2>&1; then CC=clang-20; CXX=clang++-20; else CC=clang; CXX=clang++; fi
@@ -32,9 +40,16 @@ if grep -q "^REXGLUE_FIDELITYFX_SOURCE_DIR:INTERNAL=." "$B/CMakeCache.txt" 2>/de
   cmake -S . -B "$B" -UREXGLUE_FIDELITYFX_SOURCE_DIR -DREXGLUE_ENABLE_FIDELITYFX=OFF > /dev/null || exit 1
 fi
 
-cmake --build "$B" --parallel "${JOBS:-$(nproc)}" 2>&1 | tail -5
-rc=${PIPESTATUS[0]}
-[ "$rc" = "0" ] || { echo "[build] FAILED"; exit "$rc"; }
+LOG=$B/build.log
+cmake --build "$B" --parallel "${JOBS:-$(nproc)}" > "$LOG" 2>&1
+rc=$?
+if [ "$rc" != "0" ]; then
+  echo "[build] FAILED. Errors:"
+  grep -E -B1 -A6 'FAILED:|error:|Failed:|undefined reference' "$LOG" | head -40
+  echo "(full log: $LOG)"
+  exit "$rc"
+fi
+tail -2 "$LOG"
 
 n=$(ninja -C "$B" -t commands 2>/dev/null | grep "src/ui/presenter.cpp" | head -1 | grep -c REX_HAS_FIDELITYFX_SDK)
 if [ "$n" != "0" ] && grep -q "^REXGLUE_ENABLE_FIDELITYFX:BOOL=OFF" "$B/CMakeCache.txt"; then
