@@ -74,3 +74,6 @@ TODO.md
 
 # local patch-script backups
 *.bak-*
+
+# Linux build/launch scripts are part of the port
+!linux/*.sh
