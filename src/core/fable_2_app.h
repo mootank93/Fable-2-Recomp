@@ -31,6 +31,7 @@
 #include "fable2_address_scan.h"
 #include "fable2_config.h"
 #include "fable2_patches.h"
+#include "fable2_launcher_menu.h"
 // #include "fable2_deadbeef_overlay.h"
 // 30fps-cap instrumentation (writes fps_probe.log next to the exe). Disabled
 // now that the cap is lifted via REX_VSYNC=0 (see tools/fable2-uncapped.cmd).
@@ -570,6 +571,39 @@ class Fable2App : public rex::ReXApp {
       }
     }
   }
+  // Pre-launch settings menu. Shown inside the game window (SDK ImGui overlay)
+  // before the runtime/GPU are constructed, so every choice applies this run.
+  std::optional<rex::PathConfig> OnFinalizePaths(
+      const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
+    if (!fable2::launcher_menu::Enabled() || !imgui_drawer() || !window()) {
+      fable2::launcher_menu::SignalGo();
+      return defaults;
+    }
+    new fable2::launcher::LauncherDialog(
+        imgui_drawer(), "Fable II", fable2::launcher_menu::BuildItems(),
+        [this, defaults, resume](bool start, const std::vector<fable2::launcher::Item>& items) {
+          // The dialog is mid-draw; continue from a clean UI-thread turn.
+          app_context().CallInUIThreadDeferred([this, defaults, resume, start, items]() {
+            if (!start) {
+              REXSYS_INFO("[launcher] quit requested from the launch menu");
+              app_context().QuitFromUIThread();
+              return;
+            }
+            const bool was_fullscreen =
+                fable2::launcher_menu::detail::Norm(rex::cvar::GetFlagByName("fullscreen")) ==
+                "true";
+            fable2::launcher_menu::Apply(items);
+            const bool want_fullscreen =
+                fable2::launcher_menu::detail::Norm(rex::cvar::GetFlagByName("fullscreen")) ==
+                "true";
+            if (want_fullscreen != was_fullscreen) window()->SetFullscreen(want_fullscreen);
+            fable2::launcher_menu::SignalGo();
+            resume(defaults);
+          });
+        });
+    return std::nullopt;
+  }
+
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
     // fable2::deadbeef_overlay::register_overlay(drawer);
   }

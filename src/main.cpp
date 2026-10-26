@@ -79,6 +79,11 @@ REXCVAR_DEFINE_BOOL(skipHash, false, "Launch",
                     "(useful for a modified or non-catalogue XEX). Pass "
                     "--skipHash on the command line.");
 
+// Pre-launch settings menu (src/core/fable2_launcher_*.h). --no-launcher skips it.
+REXCVAR_DEFINE_BOOL(launcher, true, "Launch",
+                    "Show the pre-launch settings menu. Pass --no-launcher (or set "
+                    "FABLE2_NO_LAUNCHER=1) to skip it.");
+
 #ifdef _WIN32
 // Hybrid-graphics laptops (Intel/AMD iGPU + NVIDIA/AMD dGPU): ask the drivers
 // to run us on the discrete GPU. Without this Windows may hand the game the
