@@ -16,6 +16,8 @@
 //
 // Guest arena (big-endian): host = base + guest_addr (base = 0x100000000).
 #pragma once
+// Windows-only diagnostics (compiled out on other platforms)
+#ifdef _WIN32
 
 #include <atomic>
 #include <chrono>
@@ -514,3 +516,15 @@ inline void process(const uint8_t* base, PPCContext& ctx) {
 }
 
 }  // namespace fable2::deadbeef
+#else
+// Non-Windows: the probe is compiled out; inert stand-ins keep its callers compiling
+// (all of these are off by default on Windows too).
+#include <cstdint>
+struct PPCContext;
+namespace fable2 {
+namespace deadbeef {
+inline bool enabled() { return false; }
+inline void process(uint8_t*, PPCContext&) {}
+}  // namespace deadbeef
+}  // namespace fable2
+#endif  // _WIN32

@@ -15,6 +15,8 @@
 // Log: fable2_font_probe.log in the CWD.
 
 #pragma once
+// Windows-only diagnostics (compiled out on other platforms)
+#ifdef _WIN32
 
 #include <atomic>
 #include <cstdarg>
@@ -401,3 +403,14 @@ inline void maybe_scan(uint8_t* base) {
 }
 
 }  // namespace fable2::fontprobe
+#else
+// Non-Windows: the probe is compiled out; inert stand-ins keep its callers compiling
+// (all of these are off by default on Windows too).
+#include <cstdint>
+struct PPCContext;
+namespace fable2 {
+namespace fontprobe {
+inline void maybe_scan(uint8_t*) {}
+}  // namespace fontprobe
+}  // namespace fable2
+#endif  // _WIN32

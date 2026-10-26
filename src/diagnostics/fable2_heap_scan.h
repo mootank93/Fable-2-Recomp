@@ -16,6 +16,8 @@
 // Log: fable2_heap_scan.log in the CWD (exe dir).
 
 #pragma once
+// Windows-only diagnostics (compiled out on other platforms)
+#ifdef _WIN32
 
 #include <algorithm>
 #include <atomic>
@@ -376,3 +378,4 @@ extern "C" void UIText_FrameRender(PPCContext& ctx, uint8_t* base) {
   if (fable2::uir::hook("UIText_FrameRender", ctx, base)) return;
   __imp__UIText_FrameRender(ctx, base);
 }
+#endif  // _WIN32

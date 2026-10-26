@@ -1,4 +1,6 @@
 #pragma once
+// Windows-only diagnostics (compiled out on other platforms)
+#ifdef _WIN32
 // fable2_av_probe.h — app-side VEH that logs the guest state at every
 // access-violation (AV) raised inside the emulated process.
 //
@@ -307,3 +309,4 @@ static Registrar g_av_probe_registrar;
 }  // namespace fable2_av_probe
 
 #endif  // FABLE2_AV_PROBE_H
+#endif  // _WIN32

@@ -32,6 +32,8 @@
 // gives the epoch ms of the first call for aligning with other logs.
 
 #pragma once
+// Windows-only diagnostics (compiled out on other platforms)
+#ifdef _WIN32
 
 #include <atomic>
 #include <chrono>
@@ -901,3 +903,14 @@ inline void scan(const char* name, PPCContext& ctx, uint8_t* base) {
 }
 
 }  // namespace fable2::uip
+#else
+// Non-Windows: the probe is compiled out; inert stand-ins keep its callers compiling
+// (all of these are off by default on Windows too).
+#include <cstdint>
+struct PPCContext;
+namespace fable2 {
+namespace uip {
+inline void scan(const char*, PPCContext&, uint8_t*) {}
+}  // namespace uip
+}  // namespace fable2
+#endif  // _WIN32

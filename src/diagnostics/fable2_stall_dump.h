@@ -1,4 +1,6 @@
 #pragma once
+// Windows-only diagnostics (compiled out on other platforms)
+#ifdef _WIN32
 // fable2_stall_dump.h — render-thread stall detector.
 //
 // When the thread that last called fable2::uip::scan() (the render thread)
@@ -204,3 +206,4 @@ static Registrar g_stall_dump_registrar;
 }  // namespace fable2_stall_dump
 
 #endif  // FABLE2_STALL_DUMP_H
+#endif  // _WIN32
