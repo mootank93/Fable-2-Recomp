@@ -9,7 +9,7 @@ cd "$ROOT" || exit 1
 
 [ -f thirdparty/rexglue-sdk/CMakeLists.txt ] || { echo "[build] SDK submodule missing. Run: git submodule update --init --recursive"; exit 1; }
 
-if [ ! -f "$B/CMakeCache.txt" ]; then
+if [ ! -f "$B/build.ninja" ]; then
   # The preset asks for clang-20 / clang++-20 (Debian/Ubuntu names). Fall back to plain clang elsewhere (Fedora, Arch...).
   if command -v clang++-20 >/dev/null 2>&1 && command -v clang-20 >/dev/null 2>&1; then CC=clang-20; CXX=clang++-20; else CC=clang; CXX=clang++; fi
   command -v "$CXX" >/dev/null 2>&1 || { echo "[build] clang not found. Install clang and lld (see LINUX.md)."; exit 1; }
@@ -19,7 +19,7 @@ if [ ! -f "$B/CMakeCache.txt" ]; then
   cmake --preset "$PRESET" \
     -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
     -DCMAKE_C_FLAGS="$MARCH" -DCMAKE_CXX_FLAGS="$MARCH" \
-    -DFABLE2_BUILD_PROFILE=goty-compatible \
+    -DFABLE2_BUILD_PROFILE=goty-compatible -DREXSDK_DIR="$ROOT/thirdparty/rexglue-sdk" \
     -DREXGLUE_ENABLE_FIDELITYFX=OFF -DREXGLUE_ENABLE_PERF_COUNTERS=ON \
     || exit 1
 fi
