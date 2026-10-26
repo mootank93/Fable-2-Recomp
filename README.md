@@ -25,7 +25,7 @@ Original GOTY USA/Europe and German GOTY dumps are supported by the default
 [ ] Increased performance / framerate\
 [x] Hero / Dog Texture bug fix (upstream renderer, verified on German GOTY)\
 [ ] Vulkan support\
-[ ] Linux Builds\
+[x] Linux builds (experimental): see [LINUX.md](LINUX.md)\
 [x] Custom commands to aid in debugging\
 [ ] Improved Graphics rendering\
 [ ] Custom menu(s) / modifying menus for extra functionality (like closing the game)\
