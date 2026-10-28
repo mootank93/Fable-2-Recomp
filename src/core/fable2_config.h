@@ -220,6 +220,8 @@ bool Load(const std::filesystem::path& path);
 
 // Parsed values (in-memory defaults until Load() succeeds).
 const Values& Get();
+void SetUnlockWebsite(bool enable);
+void SetUnlockCe(bool enable);
 // Used by the launch menu to toggle motion blur before the game starts.
 void SetDisableMotionBlur(bool disable);
 

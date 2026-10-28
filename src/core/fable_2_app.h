@@ -33,6 +33,7 @@
 #include "fable2_patches.h"
 #include "fable2_launcher_menu.h"
 #include "fable2_fps_counter.h"
+#include "fable2_quit_combo.h"
 // #include "fable2_deadbeef_overlay.h"
 // 30fps-cap instrumentation (writes fps_probe.log next to the exe). Disabled
 // now that the cap is lifted via REX_VSYNC=0 (see tools/fable2-uncapped.cmd).
@@ -382,6 +383,7 @@ class Fable2App : public rex::ReXApp {
   // Stop the state classifier thread, then the remote control server threads,
   // before anything else tears down.
   void OnShutdown() override {
+    quit_combo_.reset();
     fps_counter_.reset();
     fable2::stateprobe::stop();
     remote_server_.Stop();
@@ -576,16 +578,25 @@ class Fable2App : public rex::ReXApp {
   // Pre-launch settings menu. Shown inside the game window (SDK ImGui overlay)
   // before the runtime/GPU are constructed, so every choice applies this run.
   std::unique_ptr<rex::ui::ImGuiDialog> fps_counter_;
+  std::unique_ptr<rex::ui::ImGuiDialog> quit_combo_;
 #ifndef FABLE2_REMOTE_CONTROL
-  void OnShutdown() override { fps_counter_.reset(); }
+  void OnShutdown() override { quit_combo_.reset();
+    fps_counter_.reset(); }
 #endif
 
   std::optional<rex::PathConfig> OnFinalizePaths(
       const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
+    if (!quit_combo_ && imgui_drawer()) {
+      // Hold Start + Select for 3 s (or Ctrl+Q) -> "Quit Fable II?" box.
+      quit_combo_ = std::make_unique<fable2::QuitComboDialog>(imgui_drawer(), [this]() {
+        app_context().CallInUIThreadDeferred([this]() { app_context().QuitFromUIThread(); });
+      });
+    }
     if (!fable2::launcher_menu::Enabled() || !imgui_drawer() || !window()) {
       fable2::launcher_menu::SignalGo();
       return defaults;
     }
+    fable2::launcher::SetImageSource(immediate_drawer(), fable2::launcher_menu::ExeDir());
     new fable2::launcher::LauncherDialog(
         imgui_drawer(), "Fable II", fable2::launcher_menu::BuildItems(defaults.user_data_root),
         [this, defaults, resume](bool start, const std::vector<fable2::launcher::Item>& items) {

@@ -157,6 +157,20 @@ inline std::vector<launcher::Item> BuildItems(const std::filesystem::path& save_
     items.push_back(std::move(it));
   }
   {
+    Item it{"unlock_website", "Website bonus items",
+            "The bonus items from the original Fable II website promotions. On gives them to every character.",
+            {{"On", "on"}, {"Off", "off"}}, 0};
+    it.apply = [](const std::string& v) { fable2::config::SetUnlockWebsite(v == "on"); };
+    items.push_back(std::move(it));
+  }
+  {
+    Item it{"unlock_ce", "Collector's Edition items",
+            "The extra items from the Collector's Edition. On gives them to every character.",
+            {{"On", "on"}, {"Off", "off"}}, 0};
+    it.apply = [](const std::string& v) { fable2::config::SetUnlockCe(v == "on"); };
+    items.push_back(std::move(it));
+  }
+  {
     Item it{"fps_counter", "FPS counter",
             "Shows the game's frame rate (and the display's) in the corner of the screen. Detailed adds the frame time in milliseconds.",
             {{"Off", "off"}, {"On", "on"}, {"Detailed", "detailed"}}, 0};
@@ -173,13 +187,31 @@ inline std::vector<launcher::Item> BuildItems(const std::filesystem::path& save_
     auto dir = std::make_shared<std::string>();
     if (auto s = saved.find("saves_dir"); s != saved.end()) *dir = s->second;
     Item sd{"saves_dir", "Save folder",
-            "Where Export / Import look for the saves zip. Press Enter, type a path (~ means your home folder), Enter again. Empty = ~/Fable2-Saves.",
-            {}, 0, nullptr, dir};
+            "Where exported saves go and where Import looks first. Press A / Enter to browse for a folder (no typing). Default: ~/Fable2-Saves.",
+            {}, 0};
+    sd.text = dir;
+    sd.browse = [dir]() {
+      launcher::BrowseRequest r;
+      r.mode = launcher::BrowseRequest::kFolder;
+      r.title = "Choose the save folder";
+      r.start = saves::TransferDir(*dir);
+      r.on_pick = [dir](const std::filesystem::path& p) { *dir = p.string(); return "Save folder set to " + p.string(); };
+      return r;
+    };
     Item ex{"", "Export saves", "Zips your saves into the save folder above, ready to copy to another device.",
             {}, 0, [save_root, dir] { return saves::DoExport(save_root, *dir); }};
     Item im{"", "Import saves",
-            "Loads the newest .zip from the save folder above (your current saves are backed up first).",
-            {}, 0, [save_root, dir] { return saves::DoImport(save_root, *dir); }};
+            "Pick a saves .zip to load (your current saves are backed up first). Browse to a USB stick or another folder if needed.",
+            {}, 0};
+    im.browse = [save_root, dir]() {
+      launcher::BrowseRequest r;
+      r.mode = launcher::BrowseRequest::kFile;
+      r.title = "Choose a saves .zip to import";
+      r.ext = ".zip";
+      r.start = saves::TransferDir(*dir);
+      r.on_pick = [save_root, dir](const std::filesystem::path& p) { return saves::DoImportFile(save_root, p, *dir); };
+      return r;
+    };
     items.push_back(std::move(sd));
     items.push_back(std::move(ex));
     items.push_back(std::move(im));
@@ -196,6 +228,10 @@ inline std::vector<launcher::Item> BuildItems(const std::filesystem::path& save_
       want = (cur("guest_vblank_pacing") != "false") ? "30" : (lim == "60" || lim == "120") ? lim : "native";
     } else if (it.key == "motion_blur") {
       want = fable2::config::Get().disable_motion_blur ? "off" : "on";
+    } else if (it.key == "unlock_website") {
+      want = fable2::config::Get().unlock_website ? "on" : "off";
+    } else if (it.key == "unlock_ce") {
+      want = fable2::config::Get().unlock_ce ? "on" : "off";
     } else if (it.key == "preset") {
       want = "custom";
     } else if (it.key == "fps_counter") {
@@ -217,6 +253,10 @@ inline void Apply(const std::vector<launcher::Item>& items) {
     if (it.text) { out << it.key << '=' << *it.text << '\n'; continue; }
     if (it.choices.empty() || it.key.empty()) continue;
     const std::string& v = it.choices[it.selected].value;
+    if (it.key == "preset") {  // only a label in the menu, not a cvar
+      out << it.key << '=' << v << '\n';
+      continue;
+    }
     if (it.apply) {
       it.apply(v);
       REXSYS_INFO("[launcher] {} = '{}'", it.key, v);

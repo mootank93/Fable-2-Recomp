@@ -209,6 +209,18 @@ inline std::string DoExport(const fs::path& root, const std::string& chosen_dir)
   return "Exported " + std::to_string(n) + " files to " + out.string();
 }
 
+inline std::string DoImportFile(const fs::path& root, const fs::path& zip, const std::string& chosen_dir) {
+  const fs::path dir = TransferDir(chosen_dir);
+  std::error_code ec;
+  if (fs::is_directory(root, ec)) {  // keep a copy of what we're about to replace
+    ExportZip(root, dir / ("backup-before-import-" + Timestamp() + ".zip"));
+  }
+  int n = 0;
+  if (auto err = ImportZip(zip, root, &n); !err.empty()) return err;
+  return "Imported " + std::to_string(n) + " files from " + zip.filename().string() +
+         " (your old saves were backed up).";
+}
+
 inline std::string DoImport(const fs::path& root, const std::string& chosen_dir) {
   const fs::path dir = TransferDir(chosen_dir);
   const fs::path zip = NewestZip(dir);

@@ -437,6 +437,8 @@ bool Load(const std::filesystem::path& path) {
 }
 
 const Values& Get() { return g_values; }
+void SetUnlockWebsite(bool enable) { g_values.unlock_website = enable; }
+void SetUnlockCe(bool enable) { g_values.unlock_ce = enable; }
 
 void SetDisableMotionBlur(bool disable) { g_values.disable_motion_blur = disable; }
 
