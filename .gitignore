@@ -82,3 +82,5 @@ TODO.md
 !installer/*.py
 !installer/*.sh
 !installer/src/*.py
+!assets/launcher/*.png
+!docs/screenshots/*.png
