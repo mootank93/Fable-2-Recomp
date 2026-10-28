@@ -23,10 +23,11 @@ LOG = CACHE / "setup.log"
 NEED_GB = 25
 
 # @@XISO@@
+# @@ART@@
 
 # ---------------------------------------------------------------- distro support
 DEV_PACKAGES = {
-    "fedora": ("dnf", "install -y --setopt=strict=0", [
+    "fedora": ("dnf", "install -y", [
         "clang", "lld", "cmake", "ninja-build", "git", "gcc-c++", "make", "python3", "pkgconf-pkg-config",
         "vulkan-loader-devel", "mesa-vulkan-drivers", "wayland-devel", "wayland-protocols-devel",
         "libxkbcommon-devel", "libX11-devel", "libXext-devel", "libXrandr-devel", "libXcursor-devel",
@@ -449,44 +450,165 @@ def run_cli(args):
     return 0
 
 
-# ---------------------------------------------------------------- graphical UI (Tk; optional)
+# ---------------------------------------------------------------- native file pickers
+def _run_picker(cmd):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else ""
+
+
+def pick_path(kind, start=None, parent=None):
+    """Opens the desktop's own file chooser. kind: 'iso' or 'folder'. Returns a path, "" if cancelled."""
+    start = str(start or (HOME / "Downloads" if (HOME / "Downloads").is_dir() else HOME))
+    title = "Select your Fable II disc image (.iso)" if kind == "iso" else "Select the folder that contains default.xex"
+    on_kde = "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+    if shutil.which("kdialog") and (on_kde or not shutil.which("zenity")):
+        cmd = ["kdialog", "--title", title] + (["--getopenfilename", start + "/", "*.iso *.ISO|Disc images (*.iso)\n*|All files"]
+                                              if kind == "iso" else ["--getexistingdirectory", start])
+        r = _run_picker(cmd)
+        if r is not None:
+            return r
+    if shutil.which("zenity"):
+        cmd = ["zenity", "--file-selection", "--title=" + title, "--filename=" + start + "/"]
+        if kind == "iso":
+            cmd += ["--file-filter=Disc images | *.iso *.ISO", "--file-filter=All files | *"]
+        else:
+            cmd += ["--directory"]
+        r = _run_picker(cmd)
+        if r is not None:
+            return r
+    from tkinter import filedialog
+    if kind == "iso":
+        return filedialog.askopenfilename(parent=parent, title=title, initialdir=start,
+                                          filetypes=[("Disc images", "*.iso *.ISO"), ("All files", "*")]) or ""
+    return filedialog.askdirectory(parent=parent, title=title, initialdir=start) or ""
+
+
+def ensure_tk():
+    """True if tkinter is usable; offers to install it (one password prompt) when it's missing."""
+    try:
+        import tkinter  # noqa
+        return True
+    except ImportError:
+        pass
+    fam, _ = detect_family()
+    pkg = {"fedora": "python3-tkinter", "debian": "python3-tk", "arch": "tk"}.get(fam)
+    if not pkg or not sys.stdin.isatty():
+        return False
+    ans = input("The graphical installer needs %s. Install it now? [Y/n] " % pkg).strip().lower()
+    if ans not in ("", "y", "yes"):
+        return False
+    mgr, flags, _ = DEV_PACKAGES[fam]
+    cmd = (["sudo"] if os.geteuid() else []) + [mgr] + flags.split() + [pkg]
+    if subprocess.run(cmd).returncode != 0:
+        return False
+    import importlib
+    importlib.invalidate_caches()
+    try:
+        import tkinter  # noqa
+        return True
+    except ImportError:
+        return False
+
+
+# ---------------------------------------------------------------- graphical UI (Tk)
+GOLD, GOLD_DIM, PANEL, TXT, TXT_DIM, GREEN = "#eec76b", "#9f8044", "#100d0a", "#d6cab0", "#9a9183", "#44881f"
+
+
 def run_gui(args):
     import tkinter as tk
-    from tkinter import filedialog, messagebox, ttk
+    from tkinter import messagebox, ttk
     root = tk.Tk()
     root.title("Fable II - Linux port installer")
-    root.geometry("760x640")
-    q = queue.Queue()
-    state = {"inst": None, "running": False}
-    pad = dict(padx=14, pady=6)
-    ttk.Label(root, text="Fable II - Linux port installer", font=("TkDefaultFont", 16, "bold")).pack(anchor="w", **pad)
-    ttk.Label(root, wraplength=720, justify="left",
-              text="Choose your own copy of Fable II: Game of the Year Edition - an .iso file, a folder with the extracted "
-                   "game, or a disc your drive can read. The installer checks the version, installs build tools, builds the "
-                   "port on this computer and adds it to your applications menu. Needs about 25 GB of free space "
-                   "and takes a while.").pack(anchor="w", **pad)
+    art = tk.PhotoImage(data=ART_B64)
+    W, H = art.width(), art.height()
+    root.geometry("%dx%d" % (W, H))
+    root.resizable(False, False)
+    cv = tk.Canvas(root, width=W, height=H, highlightthickness=0, bd=0)
+    cv.pack()
+    cv.create_image(0, 0, image=art, anchor="nw")
+    bx0, by0, bx1, by1 = [int(v) for v in (ART_LAYOUT[0] * W, ART_LAYOUT[1] * H, ART_LAYOUT[2] * W, ART_LAYOUT[3] * H)]
+    cv.create_rectangle(bx0, by0, bx1, by1, fill=PANEL, outline=GOLD, width=2)
+    cv.create_rectangle(bx0 + 6, by0 + 6, bx1 - 6, by1 - 6, outline=GOLD_DIM, width=1)
+    pad = 22
+    x0, x1 = bx0 + pad, bx1 - pad
+    inner = x1 - x0
+    F = ("TkDefaultFont", 10)
+    FB = ("TkDefaultFont", 11, "bold")
+
+    cv.create_text((bx0 + bx1) // 2, by0 + 26, text="Install Fable II for Linux", fill=GOLD, font=("TkDefaultFont", 15, "bold"))
+    cv.create_text((bx0 + bx1) // 2, by0 + 48, anchor="n", width=inner, fill=TXT_DIM, font=("TkDefaultFont", 9), justify="center",
+                   text="Choose your own copy of Fable II: Game of the Year Edition. About 25 GB of free space is needed.")
+
+    def btn(text, cmd, primary=False, w=None):
+        return tk.Button(root, text=text, command=cmd, relief="flat", bd=0, cursor="hand2", font=FB if primary else F,
+                         bg=GREEN if primary else "#1d1812", fg="#fff6d8" if primary else TXT, activebackground="#58a82a" if primary else "#2b2318",
+                         activeforeground="#ffffff", highlightthickness=2, highlightbackground=GOLD if primary else GOLD_DIM,
+                         highlightcolor=GOLD, disabledforeground="#6d675c", padx=8, pady=4, width=w)
+
     src = tk.StringVar(value=args.iso or args.game or "")
-    row = ttk.Frame(root); row.pack(fill="x", **pad)
-    ent = ttk.Entry(row, textvariable=src); ent.pack(side="left", fill="x", expand=True)
-    ttk.Button(row, text="ISO file...", command=lambda: src.set(filedialog.askopenfilename(
-        title="Select your Fable II .iso", filetypes=[("Disc images", "*.iso *.ISO"), ("All files", "*")]) or src.get())).pack(side="left", padx=4)
-    ttk.Button(row, text="Folder...", command=lambda: src.set(filedialog.askdirectory(
-        title="Select the folder containing default.xex") or src.get())).pack(side="left")
+    y = by0 + 92
+    ent = tk.Entry(root, textvariable=src, bg="#1d1812", fg=TXT, insertbackground=TXT, relief="flat", font=F,
+                   highlightthickness=1, highlightbackground=GOLD_DIM, highlightcolor=GOLD, readonlybackground="#1d1812")
+    cv.create_window(x0, y, window=ent, anchor="nw", width=inner, height=30)
+    b_iso = btn("Choose ISO file...", lambda: choose("iso"), w=18)
+    b_dir = btn("Choose folder...", lambda: choose("folder"), w=18)
+    cv.create_window(x0, y + 40, window=b_iso, anchor="nw")
+    cv.create_window(x1, y + 40, window=b_dir, anchor="ne")
+
     cands = find_candidates()
+    y2 = y + 86
     if cands:
-        r2 = ttk.Frame(root); r2.pack(fill="x", **pad)
-        ttk.Label(r2, text="Found:").pack(side="left")
-        box = ttk.Combobox(r2, values=["%s - %s" % c for c in cands], state="readonly")
-        box.pack(side="left", fill="x", expand=True, padx=6)
+        cv.create_text(x0, y2, text="Found on this computer:", anchor="nw", fill=TXT_DIM, font=("TkDefaultFont", 9))
+        st = ttk.Style(root)
+        try:
+            st.theme_use("clam")
+        except tk.TclError:
+            pass
+        st.configure("F.TCombobox", fieldbackground="#1d1812", background="#1d1812", foreground=TXT, arrowcolor=GOLD,
+                     bordercolor=GOLD_DIM, lightcolor="#1d1812", darkcolor="#1d1812", selectbackground="#1d1812", selectforeground=TXT)
+        st.map("F.TCombobox", fieldbackground=[("readonly", "#1d1812")], foreground=[("readonly", TXT)],
+               selectbackground=[("readonly", "#1d1812")], selectforeground=[("readonly", TXT)])
+        root.option_add("*TCombobox*Listbox.background", "#1d1812")
+        root.option_add("*TCombobox*Listbox.foreground", TXT)
+        root.option_add("*TCombobox*Listbox.selectBackground", GREEN)
+        box = ttk.Combobox(root, values=["%s - %s" % c for c in cands], state="readonly", style="F.TCombobox")
+        cv.create_window(x0, y2 + 18, window=box, anchor="nw", width=inner)
         box.bind("<<ComboboxSelected>>", lambda e: src.set(cands[box.current()][1]))
-    bar = ttk.Progressbar(root, maximum=1000); bar.pack(fill="x", **pad)
-    status = tk.StringVar(value="Ready.")
-    ttk.Label(root, textvariable=status).pack(anchor="w", padx=14)
-    txt = tk.Text(root, height=14, state="disabled", wrap="none", font=("TkFixedFont", 9)); txt.pack(fill="both", expand=True, **pad)
-    btns = ttk.Frame(root); btns.pack(fill="x", **pad)
-    go = ttk.Button(btns, text="Install"); go.pack(side="left")
-    cancel = ttk.Button(btns, text="Cancel", state="disabled"); cancel.pack(side="left", padx=8)
-    play = ttk.Button(btns, text="Play now", state="disabled"); play.pack(side="right")
+        y2 += 54
+    go = btn("Install", lambda: start(), primary=True, w=16)
+    cancel = btn("Cancel", lambda: state["inst"] and state["inst"].stop(), w=10)
+    cancel.configure(state="disabled")
+    cv.create_window(x0, y2 + 6, window=go, anchor="nw", height=44)
+    cv.create_window(x1, y2 + 6, window=cancel, anchor="ne", height=44)
+
+    py = y2 + 66
+    cv.create_rectangle(x0, py, x1, py + 10, fill="#2a2218", outline="")
+    fill = cv.create_rectangle(x0, py, x0, py + 10, fill=GOLD, outline="")
+    status = cv.create_text(x0, py + 20, text="Ready.", anchor="nw", fill=TXT, font=F, width=inner)
+    log_btn = btn("Show details", lambda: toggle_log(), w=14)
+    cv.create_window(x0, by1 - 50, window=log_btn, anchor="sw")
+    play = btn("Play now", lambda: subprocess.Popen([str(PREFIX / "fable2-launch")], start_new_session=True), primary=True, w=14)
+    play.configure(state="disabled")
+    cv.create_window(x1, by1 - 50, window=play, anchor="se")
+    txt = tk.Text(root, state="disabled", wrap="none", font=("TkFixedFont", 8), bg="#0a0806", fg=TXT_DIM, relief="flat",
+                  highlightthickness=1, highlightbackground=GOLD_DIM)
+    log_win = cv.create_window(x0, py + 52, window=txt, anchor="nw", width=inner, height=by1 - 62 - (py + 52) - 36, state="hidden")
+    q = queue.Queue()
+    state = {"inst": None, "running": False, "log": False}
+
+    def toggle_log(force=None):
+        state["log"] = (not state["log"]) if force is None else force
+        cv.itemconfigure(log_win, state="normal" if state["log"] else "hidden")
+        log_btn.configure(text="Hide details" if state["log"] else "Show details")
+
+    def choose(kind):
+        root.update_idletasks()
+        p = pick_path(kind, parent=root)
+        if p:
+            src.set(p)
 
     def append(m):
         txt.configure(state="normal"); txt.insert("end", m + "\n"); txt.see("end"); txt.configure(state="disabled")
@@ -495,15 +617,20 @@ def run_gui(args):
         try:
             while True:
                 k, a = q.get_nowait()
-                if k == "log": append(a)
-                elif k == "prog": bar["value"] = a[0] * 1000; status.set(a[1] or status.get())
+                if k == "log":
+                    append(a)
+                elif k == "prog":
+                    cv.coords(fill, x0, py, x0 + inner * a[0], py + 10)
+                    if a[1]:
+                        cv.itemconfigure(status, text=a[1])
                 elif k == "done":
                     state["running"] = False; go.configure(state="normal"); cancel.configure(state="disabled")
                     if a is None:
-                        status.set("Installed!"); bar["value"] = 1000; play.configure(state="normal")
-                        messagebox.showinfo("Done", "Fable II is installed. Start it from your applications menu or press Play now.")
+                        cv.itemconfigure(status, text="Installed! Start Fable II from your applications menu."); cv.coords(fill, x0, py, x1, py + 10)
+                        play.configure(state="normal")
                     else:
-                        status.set("Stopped."); messagebox.showerror("Installer", a)
+                        cv.itemconfigure(status, text="Stopped: " + a.splitlines()[0][:90]); toggle_log(True)
+                        messagebox.showerror("Installer", a)
         except queue.Empty:
             pass
         root.after(150, pump)
@@ -520,23 +647,24 @@ def run_gui(args):
 
     def start():
         if not src.get().strip():
-            messagebox.showwarning("Installer", "Choose your Fable II ISO or game folder first."); return
+            choose("iso")
+            if not src.get().strip():
+                return
         inst = Installer(src.get().strip(), lambda m: q.put(("log", m)), lambda f, l: q.put(("prog", (f, l))),
                          use_gui_auth=True, keep_build=args.keep_build, dry_run=args.dry_run)
         state["inst"], state["running"] = inst, True
         go.configure(state="disabled"); cancel.configure(state="normal"); play.configure(state="disabled")
         threading.Thread(target=work, args=(inst,), daemon=True).start()
 
-    go.configure(command=start)
-    cancel.configure(command=lambda: state["inst"] and state["inst"].stop())
-    play.configure(command=lambda: subprocess.Popen([str(PREFIX / "fable2-launch")], start_new_session=True))
-
     def closing():
         if state["running"] and not messagebox.askyesno("Installer", "An install is running. Stop it and quit?"):
             return
-        if state["inst"]: state["inst"].stop()
+        if state["inst"]:
+            state["inst"].stop()
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", closing)
+    if getattr(args, "autostart", False):
+        root.after(500, start)
     pump(); root.mainloop()
     return 0
 
@@ -549,6 +677,7 @@ def main():
     ap.add_argument("--keep-build", action="store_true", help="keep the build folder (several GB) after installing")
     ap.add_argument("--dry-run", action="store_true", help="show the steps without changing anything")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--autostart", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--test-iso", metavar="PATH", help="only check an image: reads it and verifies the game version")
     a = ap.parse_args()
     if a.test_iso:
@@ -564,12 +693,9 @@ def main():
     if os.uname().machine not in ("x86_64", "amd64"):
         print("This installer builds the x86-64 version. For ARM handhelds use the ArmadaOS package."); return 1
     if not a.cli and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        try:
-            import tkinter  # noqa
-        except ImportError:
-            print("(Graphical mode needs python3-tk; installing it is optional. Continuing in the terminal.)")
-        else:
+        if ensure_tk():
             return run_gui(a)
+        print("(The graphical installer needs python3-tk; continuing in the terminal.)")
     return run_cli(a)
 
 
