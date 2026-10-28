@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.1 - Ubuntu / Debian fixes
+- Installer: the Debian/Ubuntu package list was missing `libxtst-dev`, `libx11-xcb-dev`, `libxcb1-dev` and `libegl1-mesa-dev`; the Fedora and Arch lists got the matching packages.
+- Installer: the game needs clang 19 or newer (C++23). On Ubuntu/Debian it now installs `clang-20` and `lld-20`, checks the compiler version, and restarts the build from scratch if the compiler changed. Ubuntu 24.04 is now confirmed to build and run.
+
 ## 2.2 - Update and Uninstall
 - The installer window now has Update and Uninstall buttons. Update fetches the newest release and rebuilds, keeping your saves, settings and game files. Uninstall removes the port (your original ISO is never touched) and can keep a backup of your saves.
 - Command line: `--update`, `--uninstall`, `--status`.

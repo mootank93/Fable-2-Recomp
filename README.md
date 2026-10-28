@@ -29,7 +29,7 @@ Requirements: a 64-bit Linux PC with a **Vulkan-capable GPU** (the game uses Vul
 
 **Supported game:** Fable II Game of the Year Edition. The installer accepts the `default.xex` with SHA-256 `88c4ef2e18e65409444d1b068eff921d1f7e180a5ae64edc64ba6b0872372662`. Other revisions are rejected.
 
-**Tested on:** Nobara / Fedora 44 (KDE Plasma, Wayland) with an AMD Ryzen 9 7950X and Radeon RX 7900 XT, running at 4K with maximum settings. A PS4 controller (wired) is the pad used for testing. The package lists for Debian/Ubuntu and Arch are included but not yet tested. Reports from other distributions are very welcome.
+**Tested on:** Ubuntu 24.04 (builds and runs, tested in a container). Nobara / Fedora 44 (KDE Plasma, Wayland) with an AMD Ryzen 9 7950X and Radeon RX 7900 XT, running at 4K with maximum settings. A PS4 controller (wired) is the pad used for testing. The package lists for Debian/Ubuntu and Arch are included but not yet tested. Reports from other distributions are very welcome.
 
 ### Packages the build needs
 
@@ -38,23 +38,25 @@ The installer installs these for you on Fedora-family, Debian-family and Arch-fa
 <details>
 <summary>Fedora / Nobara / RHEL family (dnf)</summary>
 
-`clang lld cmake ninja-build git gcc-c++ make python3 pkgconf-pkg-config vulkan-loader-devel mesa-vulkan-drivers wayland-devel wayland-protocols-devel libxkbcommon-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel alsa-lib-devel pulseaudio-libs-devel libdrm-devel mesa-libgbm-devel mesa-libGL-devel libdecor-devel dbus-devel systemd-devel libusb1-devel`
+`clang lld cmake ninja-build git gcc-c++ make python3 pkgconf-pkg-config vulkan-loader-devel mesa-vulkan-drivers wayland-devel wayland-protocols-devel libxkbcommon-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libxcb-devel libXtst-devel libXScrnSaver-devel mesa-libEGL-devel alsa-lib-devel pulseaudio-libs-devel libdrm-devel mesa-libgbm-devel mesa-libGL-devel libdecor-devel dbus-devel systemd-devel libusb1-devel`
 
 </details>
 
 <details>
 <summary>Debian / Ubuntu / Mint / Pop!_OS (apt)</summary>
 
-`build-essential clang lld cmake ninja-build git python3 pkg-config libvulkan-dev mesa-vulkan-drivers libwayland-dev wayland-protocols libxkbcommon-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libasound2-dev libpulse-dev libdrm-dev libgbm-dev libgl1-mesa-dev libdecor-0-dev libdbus-1-dev libudev-dev libusb-1.0-0-dev`
+`build-essential clang-20 lld-20 cmake ninja-build git python3 pkg-config libvulkan-dev mesa-vulkan-drivers libwayland-dev wayland-protocols libxkbcommon-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libx11-xcb-dev libxcb1-dev libxtst-dev libegl1-mesa-dev libxss-dev libasound2-dev libpulse-dev libdrm-dev libgbm-dev libgl1-mesa-dev libdecor-0-dev libdbus-1-dev libudev-dev libusb-1.0-0-dev`
 
 </details>
 
 <details>
 <summary>Arch / Manjaro / EndeavourOS / CachyOS (pacman)</summary>
 
-`base-devel clang lld cmake ninja git python vulkan-headers vulkan-icd-loader mesa wayland wayland-protocols libxkbcommon libx11 libxext libxrandr libxcursor libxfixes libxi libxss alsa-lib libpulse libdrm libdecor dbus libusb`
+`base-devel clang lld cmake ninja git python vulkan-headers vulkan-icd-loader mesa wayland wayland-protocols libxkbcommon libx11 libxext libxrandr libxcursor libxfixes libxi libxcb libxtst libxss alsa-lib libpulse libdrm libdecor dbus libusb`
 
 </details>
+
+The game needs **clang 19 or newer** (it uses C++23). Ubuntu 24.04's default clang 18 is too old, which is why the list above uses `clang-20`.
 
 Immutable distributions (SteamOS, Bazzite, Silverblue and similar) are not supported by the installer yet. You would need to build inside a container with the packages above.
 
@@ -123,6 +125,11 @@ The menu has these settings:
 - **Folders and files:** Save folder and Import saves use a built-in browser you can drive with the pad, no keyboard needed
 
 The artwork is AI-generated fan art, made for this project.
+
+## Known issues
+
+- **White window at launch (rare):** now and then the game freezes right at startup and the window stays white. Close it and start it again; the next launch normally works.
+- **Controllers inside a container:** running the game inside a container such as distrobox can hide your controller from the game. Native installs are not affected in our testing.
 
 ## Where things go
 

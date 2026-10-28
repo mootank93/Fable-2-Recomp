@@ -13,7 +13,7 @@ import argparse, hashlib, os, queue, re, shutil, signal, subprocess, sys, thread
 from pathlib import Path
 
 REPO_URL = os.environ.get("FABLE2_REPO", "https://github.com/mootank93/Fable-2-Recomp.git")
-REF = os.environ.get("FABLE2_REF", "v2.2.0")
+REF = os.environ.get("FABLE2_REF", "v2.2.1")
 EXPECTED_XEX_SHA = os.environ.get(
     "FABLE2_XEX_SHA256", "88c4ef2e18e65409444d1b068eff921d1f7e180a5ae64edc64ba6b0872372662")
 HOME = Path.home()
@@ -32,19 +32,19 @@ DEV_PACKAGES = {
         "clang", "lld", "cmake", "ninja-build", "git", "gcc-c++", "make", "python3", "pkgconf-pkg-config",
         "vulkan-loader-devel", "mesa-vulkan-drivers", "wayland-devel", "wayland-protocols-devel",
         "libxkbcommon-devel", "libX11-devel", "libXext-devel", "libXrandr-devel", "libXcursor-devel",
-        "libXfixes-devel", "libXi-devel", "libXScrnSaver-devel", "alsa-lib-devel", "pulseaudio-libs-devel",
+        "libXfixes-devel", "libXi-devel", "libXtst-devel", "libxcb-devel", "libXScrnSaver-devel", "mesa-libEGL-devel", "alsa-lib-devel", "pulseaudio-libs-devel",
         "libdrm-devel", "mesa-libgbm-devel", "mesa-libGL-devel", "libdecor-devel", "dbus-devel",
         "systemd-devel", "libusb1-devel"]),
     "debian": ("apt-get", "install -y", [
         "build-essential", "clang", "lld", "cmake", "ninja-build", "git", "python3", "pkg-config",
         "libvulkan-dev", "mesa-vulkan-drivers", "libwayland-dev", "wayland-protocols", "libxkbcommon-dev",
         "libx11-dev", "libxext-dev", "libxrandr-dev", "libxcursor-dev", "libxfixes-dev", "libxi-dev",
-        "libxss-dev", "libasound2-dev", "libpulse-dev", "libdrm-dev", "libgbm-dev", "libgl1-mesa-dev",
+        "libx11-xcb-dev", "libxcb1-dev", "libxtst-dev", "libegl1-mesa-dev", "libxss-dev", "libasound2-dev", "libpulse-dev", "libdrm-dev", "libgbm-dev", "libgl1-mesa-dev",
         "libdecor-0-dev", "libdbus-1-dev", "libudev-dev", "libusb-1.0-0-dev"]),
     "arch": ("pacman", "-S --needed --noconfirm", [
         "base-devel", "clang", "lld", "cmake", "ninja", "git", "python", "vulkan-headers",
         "vulkan-icd-loader", "mesa", "wayland", "wayland-protocols", "libxkbcommon", "libx11", "libxext",
-        "libxrandr", "libxcursor", "libxfixes", "libxi", "libxss", "alsa-lib", "libpulse", "libdrm",
+        "libxrandr", "libxcursor", "libxfixes", "libxi", "libxcb", "libxtst", "libxss", "alsa-lib", "libpulse", "libdrm",
         "libdecor", "dbus", "libusb"]),
 }
 
@@ -77,8 +77,32 @@ def detect_family(osr=None):
     return None, "Unrecognised distro (%s)." % osr.get("PRETTY_NAME", "?")
 
 
+def packages_for(family):
+    """DEV_PACKAGES[family], with Debian/Ubuntu switched to clang-20/lld-20 when the repository offers them.
+    The game needs C++23 (std::expected), which Ubuntu 24.04's default clang 18 cannot do."""
+    mgr, flags, pkgs = DEV_PACKAGES[family]
+    if family == "debian":
+        try:
+            out = subprocess.run(["apt-cache", "policy", "clang-20"], capture_output=True, text=True).stdout
+        except OSError:
+            out = ""
+        m = re.search(r"Candidate:\s*(\S+)", out)
+        if m and m.group(1) != "(none)":
+            pkgs = [("clang-20" if p == "clang" else "lld-20" if p == "lld" else p) for p in pkgs]
+    return mgr, flags, pkgs
+
+
+def clang_major(exe):
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True).stdout
+    except OSError:
+        return 0
+    m = re.search(r"clang version (\d+)", out)
+    return int(m.group(1)) if m else 0
+
+
 def missing_packages(family):
-    mgr, _, pkgs = DEV_PACKAGES[family]
+    mgr, _, pkgs = packages_for(family)
     miss = []
     for p in pkgs:
         if family == "fedora":
@@ -338,14 +362,28 @@ class Installer:
         miss = [] if self.dry else missing_packages(fam)
         if not miss:
             self.log("All build packages already installed.")
+            self.check_compiler()
             return
-        mgr, flags, _ = DEV_PACKAGES[fam]
+        mgr, flags, _ = packages_for(fam)
         self.log("Missing packages: " + " ".join(miss))
         self.prog(0.3, "Installing build tools (you may be asked for your password)")
         cmd = self.sudo_prefix() + [mgr] + flags.split() + miss
         if mgr == "apt-get":
             cmd = self.sudo_prefix() + ["env", "DEBIAN_FRONTEND=noninteractive", mgr] + flags.split() + miss
         self.run(cmd)
+        self.check_compiler()
+
+    def check_compiler(self):
+        """The game needs a recent clang (19 or newer) for C++23."""
+        if self.dry:
+            return
+        exe = "clang++-20" if shutil.which("clang++-20") else "clang++"
+        v = clang_major(exe)
+        self.log("Compiler: %s (clang %s)" % (exe, v or "not found"))
+        if v and v < 19:
+            raise Fail("Your clang is version %d, but the game needs clang 19 or newer.\n"
+                       "On Ubuntu/Debian install clang-20 and lld-20 (for older releases see https://apt.llvm.org), "
+                       "then run the installer again." % v)
 
     def step_extract(self):
         game = PREFIX / "game"
@@ -403,6 +441,17 @@ class Installer:
             except OSError:
                 pass
             self.prog(0.0 + min(0.95, max(0, n) / 1800.0), "Building the game: %d steps done, %d min" % (max(n, 0), (time.time() - t0) // 60))
+        cache = B / "CMakeCache.txt"
+        if cache.is_file() and not self.dry:
+            want = "clang++-20" if shutil.which("clang++-20") else "clang++"
+            try:
+                m = re.search(r"^CMAKE_CXX_COMPILER:[A-Z]+=(.*)$", cache.read_text(errors="replace"), re.M)
+            except OSError:
+                m = None
+            if m and os.path.basename(m.group(1)) != want:
+                self.log("Compiler changed (%s -> %s); starting the build from scratch." % (os.path.basename(m.group(1)), want))
+                shutil.rmtree(src / "out", ignore_errors=True)
+                shutil.rmtree(src / "thirdparty/rexglue-sdk/out", ignore_errors=True)
         self.prog(0.0, "Building the game (this takes a while)")
         self.run([str(src / "linux/build.sh")], cwd=src, env={"FABLE2_GAME_DIR": gamedir}, watch=watch)
         if not self.dry and not (B / "fable_2").is_file():
@@ -687,7 +736,7 @@ def run_gui(args):
     play.configure(state="disabled")
     cv.create_window(x1, by1 - 50, window=play, anchor="se")
     un = btn("Uninstall", lambda: do_uninstall(), w=10)
-    un_win = cv.create_window((x0 + x1) // 2 - 22, by1 - 50, window=un, anchor="s", state="hidden")
+    un_win = cv.create_window((x0 + x1) // 2 - 22, by1 - 50, window=un, anchor="s")
     txt = tk.Text(root, state="disabled", wrap="none", font=("TkFixedFont", 8), bg="#0a0806", fg=TXT_DIM, relief="flat",
                   highlightthickness=1, highlightbackground=GOLD_DIM)
     log_win = cv.create_window(x0, py + 52, window=txt, anchor="nw", width=inner, height=by1 - 62 - (py + 52) - 36, state="hidden")
@@ -701,7 +750,6 @@ def run_gui(args):
         busy = state["running"]
         if info:
             go.configure(text="Update", state="disabled" if busy else "normal")
-            cv.itemconfigure(un_win, state="normal")
             un.configure(state="disabled" if busy else "normal")
             play.configure(state="disabled" if busy else "normal")
             src.set(str(PREFIX / "game"))
@@ -715,7 +763,7 @@ def run_gui(args):
             threading.Thread(target=lambda: q.put(("latest", latest_ref())), daemon=True).start()
         else:
             go.configure(text="Install", state="disabled" if busy else "normal")
-            cv.itemconfigure(un_win, state="hidden")
+            un.configure(state="disabled")  # nothing to remove yet; stays visible so the option is discoverable
             play.configure(state="disabled")
             ent.configure(state="normal")
             if src.get() == str(PREFIX / "game"):
