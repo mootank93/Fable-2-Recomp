@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Launcher. Works around a startup race: for the first seconds the game runs on a few cores only,
+# then is released to all of the cores this session is allowed to use. Core numbers are not hard-coded.
+ROOT=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+APP=$ROOT/app
+PIN_SECONDS=${FABLE2_PIN_SECONDS:-25}
+PIN_CORES=${FABLE2_PIN_CORES:-2}
+[ -x "$APP/fable_2" ] || { echo "fable_2 not found in $APP" >&2; exit 1; }
+mkdir -p "$ROOT/logs"
+
+# remove leftover shared-memory files from crashed runs (only if the game isn't running)
+if ! pgrep -x fable_2 >/dev/null 2>&1; then
+  for f in /dev/shm/xenia_memory_*; do [ -O "$f" ] && rm -f "$f"; done 2>/dev/null
+fi
+
+# expand "0-3,5" style lists
+expand() { local IFS=, p a b i; for p in $1; do case $p in *-*) a=${p%-*}; b=${p#*-}; for ((i=a;i<=b;i++)); do echo $i; done;; *) echo $p;; esac; done; }
+ORIG=""; PIN=""
+if [ "${FABLE2_NO_PIN:-$([ "$(uname -m)" = aarch64 ] && echo 1 || echo 0)}" != 1 ] && command -v taskset >/dev/null; then
+  ORIG=$(taskset -pc $$ 2>/dev/null | sed 's/.*: *//')
+  if [ -n "$ORIG" ]; then
+    total=$(expand "$ORIG" | wc -l)
+    if [ "$total" -gt "$PIN_CORES" ]; then PIN=$(expand "$ORIG" | head -n "$PIN_CORES" | paste -sd,); else ORIG=""; fi
+  fi
+fi
+
+# User settings: ROOT/settings.conf, one "name=value" per line (any game/SDK option), made by fable2-settings.
+EXTRA=()
+if [ -f "$ROOT/settings.conf" ]; then
+  while IFS='=' read -r k v; do
+    k=${k//[[:space:]]/}; v=${v//[[:space:]]/}
+    case $k in ''|\#*) continue;; esac
+    [[ $k =~ ^[a-z0-9_]+$ ]] || continue
+    [[ $v =~ ^[A-Za-z0-9_.:+-]*$ ]] || continue
+    if [ -n "$v" ]; then EXTRA+=("--$k" "$v"); else EXTRA+=("--$k"); fi
+  done < "$ROOT/settings.conf"
+fi
+
+RT=${XDG_RUNTIME_DIR:-/tmp}; rm -f "$RT"/fable2-go.*
+cd "$APP" || exit 1
+for f in lib/librexgpu-*.so; do [ -e "$f" ] && [ ! -e "$(basename "$f")" ] && ln -sf "$f" "$(basename "$f")"; done
+export LD_LIBRARY_PATH="$APP/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+ARGS=(--game_data_root "$ROOT/game" --log_file "${FABLE2_LOG:-$ROOT/logs/game.log}"
+      --mnk_mode --mnk_mouse
+      --no-vulkan_allow_present_mode_immediate --no-vulkan_allow_present_mode_mailbox
+      "${EXTRA[@]}")
+if [ -n "$PIN" ]; then taskset -c "$PIN" ./fable_2 "${ARGS[@]}" "$@" & else ./fable_2 "${ARGS[@]}" "$@" & fi
+PID=$!
+trap 'kill $PID 2>/dev/null' INT TERM
+if [ -n "$PIN" ]; then
+  # The clock starts when the launch menu is dismissed (the game writes $RT/fable2-go.<pid>), not at process start.
+  ( for _ in $(seq 1 1200); do
+      [ -e "$RT/fable2-go.$PID" ] && break
+      kill -0 $PID 2>/dev/null || exit 0
+      sleep 0.5
+    done
+    sleep "$PIN_SECONDS"; kill -0 $PID 2>/dev/null && taskset -a -pc "$ORIG" $PID >/dev/null 2>&1 ) &
+  REL=$!
+fi
+wait $PID; RC=$?
+rm -f "$RT/fable2-go.$PID" 2>/dev/null
+[ -n "${REL:-}" ] && kill $REL 2>/dev/null
+exit $RC
