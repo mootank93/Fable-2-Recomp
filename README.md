@@ -1,10 +1,165 @@
-# Fable 2 — ReXGlue Recompiled Project
-First and for most this project was made to test the capabilities of local and open source AI. This project was made using Qwen3.8 27b. After about an hour it got the game running. Then after a large amount of human trial and error I was able to get enough of the functions mapped to be able to complete the game. I currently do not consider this to be fully complete as I have yet to 100% the game. The sha256 of the iso that started this project is: "685a0d3bea9718812f17bcd155907a5359a548b6d3d8342dd2a6c944f45e35ff" and its the Fable 2 GOTY for USA and Europe.
+<!-- linux-top-begin -->
+# Fable II: Linux Edition
 
-Recompilation of Fable 2 (Xbox 360, title ID 4D5307F1) using the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) v0.10.0. Guest PPC code is statically recompiled to C++ at build time by `rexglue codegen`, driven by `fable_2_manifest.toml`.
+**A native Linux build of the Fable II (Xbox 360) static recompilation, with a one-file installer and a controller-friendly launch menu.**
 
-# Important Note:
-**This project does not condone Piracy, any mentions or links will result in removal and an instant ban from this repo!**
+<p align="center"><img src="docs/screenshots/menu.png" alt="The Fable II launch menu" width="860"></p>
+
+> **Bring your own game.** This repository contains no game files, no recompiled game code and no prebuilt game binaries. You build everything on your own machine from your own copy of Fable II.
+> This project does not condone piracy. Mentions of or links to pirated copies will be removed and result in a ban from this repo.
+
+**Fable II: Linux Edition** is a Linux-focused fork of [himdo/Fable-2-Recomp](https://github.com/himdo/Fable-2-Recomp), the original Windows recompilation built on the ReXGlue SDK. The recompilation itself is upstream's work. This fork adds everything needed to make it a one-download experience on Linux: an installer that builds the game from your own disc image, a launch menu you can drive with a gamepad, and the tooling around it. The Windows documentation is kept further down, and the Linux build still follows upstream.
+
+## Get started on Linux
+
+1. Download **`Fable2-Linux-Installer.tar.gz`** from the [latest release](../../releases/latest).
+2. Extract it and double-click **Install Fable II** (or run `./fable2-setup.py`).
+3. Pick your Fable II disc image (`.iso`) or an already-extracted game folder.
+4. Wait while it checks the game, installs any missing build tools, builds and installs.
+5. Launch **Fable II** from your application menu.
+
+What the installer does for you:
+
+- Reads the Xbox 360 disc image itself (no separate extractor) and checks `default.xex` against the supported version before building anything.
+- Detects your distribution and installs the build tools it needs through your package manager (dnf, apt or pacman).
+- Fetches the source, builds the game and installs it with a menu entry. Your game files stay on your machine.
+- Has **Update** (pulls the newest port without touching your saves) and **Uninstall** (removes the port, keeps your saves unless you ask otherwise).
+
+Requirements: a 64-bit Linux PC with a **Vulkan-capable GPU** (the game uses Vulkan for all rendering, so you need a working Vulkan driver, such as Mesa RADV/ANV or NVIDIA's), a working internet connection for the first run, and about 25 GB of free disk space while building (about 17 GB if you point it at an already-extracted folder). The build files are cleaned up afterwards.
+
+**Supported game:** Fable II Game of the Year Edition. The installer accepts the `default.xex` with SHA-256 `88c4ef2e18e65409444d1b068eff921d1f7e180a5ae64edc64ba6b0872372662`. Other revisions are rejected.
+
+**Tested on:** Nobara / Fedora 44 (KDE Plasma, Wayland) with an AMD Ryzen 9 7950X and Radeon RX 7900 XT, running at 4K with maximum settings. A PS4 controller (wired) is the pad used for testing. The package lists for Debian/Ubuntu and Arch are included but not yet tested. Reports from other distributions are very welcome.
+
+### Packages the build needs
+
+The installer installs these for you on Fedora-family, Debian-family and Arch-family distributions. On any other distribution, install the equivalents yourself first, then run the installer (it skips what is already there).
+
+<details>
+<summary>Fedora / Nobara / RHEL family (dnf)</summary>
+
+`clang lld cmake ninja-build git gcc-c++ make python3 pkgconf-pkg-config vulkan-loader-devel mesa-vulkan-drivers wayland-devel wayland-protocols-devel libxkbcommon-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel alsa-lib-devel pulseaudio-libs-devel libdrm-devel mesa-libgbm-devel mesa-libGL-devel libdecor-devel dbus-devel systemd-devel libusb1-devel`
+
+</details>
+
+<details>
+<summary>Debian / Ubuntu / Mint / Pop!_OS (apt)</summary>
+
+`build-essential clang lld cmake ninja-build git python3 pkg-config libvulkan-dev mesa-vulkan-drivers libwayland-dev wayland-protocols libxkbcommon-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libasound2-dev libpulse-dev libdrm-dev libgbm-dev libgl1-mesa-dev libdecor-0-dev libdbus-1-dev libudev-dev libusb-1.0-0-dev`
+
+</details>
+
+<details>
+<summary>Arch / Manjaro / EndeavourOS / CachyOS (pacman)</summary>
+
+`base-devel clang lld cmake ninja git python vulkan-headers vulkan-icd-loader mesa wayland wayland-protocols libxkbcommon libx11 libxext libxrandr libxcursor libxfixes libxi libxss alsa-lib libpulse libdrm libdecor dbus libusb`
+
+</details>
+
+Immutable distributions (SteamOS, Bazzite, Silverblue and similar) are not supported by the installer yet. You would need to build inside a container with the packages above.
+
+> A normal PC DVD drive usually cannot read the Xbox 360 game partition of the disc, so make an ISO of your disc first and give the installer that.
+
+## What this fork adds
+
+The Linux port, installer and launch menu were developed by [mootank93](https://github.com/mootank93) with AI assistance (Claude). Every item below has been built and tested on real hardware.
+
+- [x] Native Linux build of the recompiled game
+- [x] One-file installer: your ISO or folder in, installed game out
+- [x] Built-in Xbox 360 ISO reader in the installer, checked byte-for-byte against `extract-xiso`
+- [x] Window with the launch-menu artwork, native file pickers, and a terminal fallback
+- [x] Automatic build-tool installation for Fedora, Debian/Ubuntu and Arch families
+- [x] Update and Uninstall, with saves kept safe
+- [x] In-game launch menu with keyboard, mouse and gamepad support
+- [x] Unlock toggles for the Website bonus items and the Collector's Edition items
+- [x] Hold **Start + Select** for 3 seconds (keyboard: **Ctrl+Q**) to quit the game, with a "Quit Fable II?" confirmation
+- [x] Controller-friendly folder and file browser for choosing the save folder and importing saves
+- [x] Save import that backs up your current saves first
+- [x] Releases with a changelog, screenshots and a single download
+
+## What's next
+
+- [ ] Test the installer on Debian/Ubuntu and Arch
+- [ ] ARM64 build for handhelds (see below)
+- [ ] Higher-resolution support
+- [ ] Better performance and frame rate
+- [ ] Windows compile check of the new menu code
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/ingame-1.png" alt="In-game" width="420">
+  <img src="docs/screenshots/ingame-2.png" alt="In-game" width="420">
+</p>
+<p align="center">
+  <img src="docs/screenshots/quit-box.png" alt="The quit confirmation" width="420">
+</p>
+
+## The launch menu
+
+When the game starts on Linux you get the launch menu first, where you choose your settings before the game boots. It is built to work with a gamepad, keyboard or mouse.
+
+The menu has these settings:
+
+| Setting | What it does |
+|---|---|
+| Preset | Quick starting points for the settings below |
+| Render scale | Internal rendering resolution |
+| Anisotropic filtering | Texture sharpness at an angle |
+| Frame rate | Frame rate limit |
+| Motion blur | On or off |
+| Website bonus items | Unlock the Website bonus items |
+| Collector's Edition items | Unlock the Collector's Edition items |
+| FPS counter | Show the frame rate on screen |
+| Full screen | Windowed or full screen |
+| VSync | On or off |
+| Save folder | Choose where your saves are kept |
+| Export saves | Save a backup of your saves |
+| Import saves | Restore saves from a backup (your current saves are backed up first) |
+
+- **Move:** D-pad / left stick, arrow keys, or the mouse
+- **Choose:** A (or Enter); **Back:** B (or Escape / Backspace)
+- **Quit any time:** hold Start + Select for 3 seconds, or press Ctrl+Q. A box asks "Quit Fable II?" and defaults to No.
+- **Folders and files:** Save folder and Import saves use a built-in browser you can drive with the pad, no keyboard needed
+
+The artwork is AI-generated fan art, made for this project.
+
+## Where things go
+
+| What | Where |
+|---|---|
+| Installed port | `~/.local/share/fable2-port` |
+| Installer cache | `~/.cache/fable2-setup` |
+| Saves (default) | `~/Fable2-Saves` (changeable in the launch menu) |
+| Install record | `.fable2-port-install` inside the install folder (used by Update and Uninstall) |
+
+Setting `FABLE2_PREFIX` before running the installer installs somewhere else.
+
+## Building from source on Linux
+
+Normally the installer does this for you. To build by hand, see [LINUX.md](LINUX.md) and run `linux/build.sh` with `FABLE2_GAME_DIR` pointing at your extracted game. The SDK used is [mootank93/rexglue-sdk](https://github.com/mootank93/rexglue-sdk), a fork of [himdo/rexglue-sdk](https://github.com/himdo/rexglue-sdk), included as a submodule.
+
+## Handhelds (ARM64)
+
+An experimental ARM64 build runs on a Retroid Pocket 6 (ArmadaOS, Adreno 740 with the Turnip driver). It starts, but performance is low (roughly 8 to 13 frames per second in the guest) and there are still graphical glitches, so there is no release for it yet. This work is paused for now.
+
+## About the original project
+
+The upstream project, by himdo, was started to test what local, open-source AI could do. Using Qwen it had the game running after about an hour; a long stretch of human trial and error then mapped enough functions to finish the game. It is not yet considered fully complete. The ISO that started it has SHA-256 `685a0d3bea9718812f17bcd155907a5359a548b6d3d8342dd2a6c944f45e35ff` (Fable II GOTY, USA and Europe). Upstream also reports working launches of the German, French, Italian, Russian and Spanish releases, though your mileage may vary.
+
+## Credits and legal
+
+- [himdo/Fable-2-Recomp](https://github.com/himdo/Fable-2-Recomp): the recompilation this port builds on
+- [ReXGlue SDK](https://github.com/himdo/rexglue-sdk): static recompilation toolkit and runtime
+- Launch-menu artwork: AI-generated fan art
+- Fable II is a trademark of Microsoft and was developed by Lionhead Studios. This project is unofficial and not affiliated with or endorsed by them.
+<!-- linux-top-end -->
+
+---
+
+# Windows build and developer notes
+
+*Everything below comes from the upstream Windows project. It still applies to the Windows build and to anyone working on the code.*
 
 # Current and planned features
 
