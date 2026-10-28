@@ -77,3 +77,8 @@ TODO.md
 
 # Linux build/launch scripts are part of the port
 !linux/*.sh
+
+# installer scripts are source, not generated files
+!installer/*.py
+!installer/*.sh
+!installer/src/*.py
