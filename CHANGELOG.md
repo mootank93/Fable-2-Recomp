@@ -9,3 +9,13 @@ Game compatibility and performance are unchanged; this release is about the expe
 - Close the game without Alt+F4: hold Start + Select for 3 s (or Ctrl+Q)
 - Experimental ARM64 handheld build (Retroid Pocket / ArmadaOS)
 - Optional custom menu artwork (see assets/launcher)
+
+## Screenshots
+
+![Launch menu](docs/screenshots/menu.png)
+
+![In game](docs/screenshots/ingame-1.png)
+
+![Dialogue](docs/screenshots/ingame-2.png)
+
+![Quit box](docs/screenshots/quit-box.png)
