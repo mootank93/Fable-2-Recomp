@@ -13,7 +13,7 @@ import argparse, hashlib, os, queue, re, shutil, signal, subprocess, sys, thread
 from pathlib import Path
 
 REPO_URL = os.environ.get("FABLE2_REPO", "https://github.com/mootank93/Fable-2-Recomp.git")
-REF = os.environ.get("FABLE2_REF", "v2.1.0")
+REF = os.environ.get("FABLE2_REF", "v2.2.0")
 EXPECTED_XEX_SHA = os.environ.get(
     "FABLE2_XEX_SHA256", "88c4ef2e18e65409444d1b068eff921d1f7e180a5ae64edc64ba6b0872372662")
 HOME = Path.home()
@@ -21,6 +21,7 @@ PREFIX = Path(os.environ.get("FABLE2_PREFIX", HOME / ".local/share/fable2-port")
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache")) / "fable2-setup"
 LOG = CACHE / "setup.log"
 NEED_GB = 25
+MARKER = PREFIX / ".fable2-port-install"
 
 # @@XISO@@
 # @@ART@@
@@ -102,6 +103,53 @@ class Fail(Exception):
     pass
 
 
+def read_marker():
+    """Info about the current install ({'version':..., 'game_mode':...}) or None when nothing is installed."""
+    try:
+        lines = MARKER.read_text().splitlines()
+    except OSError:
+        return None
+    if not (PREFIX / "app/fable_2").is_file():
+        return None
+    return dict(l.split("=", 1) for l in lines if "=" in l)
+
+
+def _vkey(tag):
+    return tuple(int(x) for x in re.findall(r"\d+", tag))
+
+
+def latest_ref(timeout=25):
+    """Newest released version tag (vX.Y.Z) on GitHub, or None when offline."""
+    if os.environ.get("FABLE2_REF"):
+        return os.environ["FABLE2_REF"]
+    try:
+        out = subprocess.run(["git", "ls-remote", "--tags", "--refs", REPO_URL, "v*"], capture_output=True, text=True,
+                             timeout=timeout, env=dict(os.environ, GIT_TERMINAL_PROMPT="0")).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    tags = [l.split("refs/tags/", 1)[1].strip() for l in out.splitlines() if "refs/tags/" in l]
+    tags = [t for t in tags if re.fullmatch(r"v\d+(\.\d+)*", t)]
+    return max(tags, key=_vkey) if tags else None
+
+
+def uninstall(log, keep_saves=True, remove_cache=True):
+    """Removes the install via its own uninstall.sh (never touches the original ISO/folder)."""
+    script = PREFIX / "uninstall.sh"
+    if not script.is_file():
+        raise Fail("The uninstaller was not found in %s. Nothing was removed." % PREFIX)
+    if subprocess.run(["pgrep", "-x", "fable_2"], capture_output=True).returncode == 0:
+        raise Fail("Fable II is running. Close the game first, then try again.")
+    cmd = ["bash", str(script), "--yes"] + (["--keep-saves"] if keep_saves else [])
+    r = subprocess.run(cmd, capture_output=True, text=True, env=dict(os.environ, FABLE2_PREFIX=str(PREFIX)))
+    for line in (r.stdout + r.stderr).splitlines():
+        log(line)
+    if r.returncode != 0:
+        raise Fail("Uninstall failed (exit code %d)." % r.returncode)
+    if remove_cache:
+        shutil.rmtree(CACHE / "src", ignore_errors=True)
+        shutil.rmtree(CACHE / "payload", ignore_errors=True)
+
+
 def sha256_file(path, cancelled=lambda: False):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -181,11 +229,12 @@ def find_candidates():
 class Installer:
     """Runs the steps. UI-agnostic: it calls log(text), progress(fraction, label) and ask_password()."""
 
-    def __init__(self, source, log, progress, use_gui_auth=False, keep_build=False, dry_run=False, ask_password=None):
+    def __init__(self, source, log, progress, use_gui_auth=False, keep_build=False, dry_run=False, ask_password=None, ref=None):
         self.source = Path(source).expanduser()
         self.log_cb, self.progress_cb = log, progress
         self.use_gui_auth, self.keep_build, self.dry = use_gui_auth, keep_build, dry_run
         self.ask_password = ask_password
+        self.ref = ref
         self.cancel = False
         self.proc = None
         CACHE.mkdir(parents=True, exist_ok=True)
@@ -328,12 +377,15 @@ class Installer:
     def step_source_tree(self):
         self.prog(0.0, "Downloading the port's source code")
         src = CACHE / "src"
+        ref = self.ref or latest_ref() or REF
+        self.ref = ref
+        self.log("Version: %s" % ref)
         if (src / ".git").is_dir():
             self.run(["git", "fetch", "--tags", "--force", "origin"], cwd=src)
-            self.run(["git", "checkout", "-f", REF], cwd=src)
+            self.run(["git", "checkout", "-f", ref], cwd=src)
         else:
             shutil.rmtree(src, ignore_errors=True)
-            self.run(["git", "clone", "--branch", REF, REPO_URL, str(src)])
+            self.run(["git", "clone", "--branch", ref, REPO_URL, str(src)])
         self.prog(0.5, "Downloading the SDK")
         self.run(["git", "submodule", "update", "--init", "--recursive"], cwd=src)
         self.src = src
@@ -388,6 +440,13 @@ class Installer:
         if self.mode == "folder":
             cmd += ["--game", str(self.game_dir)]
         self.run(cmd, cwd=inst, env={"FABLE2_PREFIX": str(PREFIX), "FABLE2_IN_TERM": "1"})
+        if not self.dry:
+            try:
+                commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=src, capture_output=True, text=True).stdout.strip()
+                keep = [l for l in MARKER.read_text().splitlines() if l and not l.startswith(("version=", "commit="))]
+                MARKER.write_text("\n".join(keep + ["version=%s" % self.ref, "commit=%s" % commit]) + "\n")
+            except OSError as e:
+                self.log("Could not record the installed version: %s" % e)
         if not self.keep_build and not self.dry:
             self.log("Removing build files to save disk space...")
             shutil.rmtree(CACHE / "src/out", ignore_errors=True)
@@ -423,6 +482,39 @@ class Installer:
 
 # ---------------------------------------------------------------- terminal UI
 def run_cli(args):
+    info = read_marker()
+    if args.uninstall or (info and not (args.iso or args.game or args.update)):
+        if not info:
+            print("Fable II is not installed here (%s)." % PREFIX); return 1
+        action = "uninstall" if args.uninstall else None
+        if not action:
+            print("Fable II (Linux port) %s is installed in %s" % (info.get("version", "?"), PREFIX))
+            ans = input("  1) Update   2) Uninstall   3) Quit   > ").strip()
+            action = {"1": "update", "2": "uninstall"}.get(ans)
+            if not action:
+                return 0
+        if action == "uninstall":
+            keep = True
+            if not args.yes:
+                if input("Remove Fable II (Linux port)? Your original ISO is not touched. [y/N] ").strip().lower() != "y":
+                    return 1
+                keep = input("Keep a backup of your save files? [Y/n] ").strip().lower() != "n"
+            else:
+                keep = not args.delete_saves
+            try:
+                uninstall(print, keep_saves=keep)
+            except Fail as e:
+                print("FAILED:", e); return 1
+            print("Uninstalled."); return 0
+        args.update = True
+    if args.update:
+        if not info:
+            print("Nothing to update: Fable II is not installed here."); return 1
+        latest = latest_ref()
+        if latest and info.get("version") == latest and not args.force:
+            print("Already up to date (%s)." % latest); return 0
+        print("Updating %s -> %s (your saves and settings are kept)" % (info.get("version", "?"), latest or "latest"))
+        args.iso, args.game = None, str(PREFIX / "game")
     source = args.iso or args.game
     if not source:
         cands = find_candidates()
@@ -538,8 +630,8 @@ def run_gui(args):
     F = ("TkDefaultFont", 10)
     FB = ("TkDefaultFont", 11, "bold")
 
-    cv.create_text((bx0 + bx1) // 2, by0 + 26, text="Install Fable II for Linux", fill=GOLD, font=("TkDefaultFont", 15, "bold"))
-    cv.create_text((bx0 + bx1) // 2, by0 + 48, anchor="n", width=inner, fill=TXT_DIM, font=("TkDefaultFont", 9), justify="center",
+    title_id = cv.create_text((bx0 + bx1) // 2, by0 + 26, text="Install Fable II for Linux", fill=GOLD, font=("TkDefaultFont", 15, "bold"))
+    sub_id = cv.create_text((bx0 + bx1) // 2, by0 + 48, anchor="n", width=inner, fill=TXT_DIM, font=("TkDefaultFont", 9), justify="center",
                    text="Choose your own copy of Fable II: Game of the Year Edition. About 25 GB of free space is needed.")
 
     def btn(text, cmd, primary=False, w=None):
@@ -559,6 +651,7 @@ def run_gui(args):
     cv.create_window(x1, y + 40, window=b_dir, anchor="ne")
 
     cands = find_candidates()
+    box = None
     y2 = y + 86
     if cands:
         cv.create_text(x0, y2, text="Found on this computer:", anchor="nw", fill=TXT_DIM, font=("TkDefaultFont", 9))
@@ -588,16 +681,68 @@ def run_gui(args):
     cv.create_rectangle(x0, py, x1, py + 10, fill="#2a2218", outline="")
     fill = cv.create_rectangle(x0, py, x0, py + 10, fill=GOLD, outline="")
     status = cv.create_text(x0, py + 20, text="Ready.", anchor="nw", fill=TXT, font=F, width=inner)
-    log_btn = btn("Show details", lambda: toggle_log(), w=14)
+    log_btn = btn("Show details", lambda: toggle_log(), w=12)
     cv.create_window(x0, by1 - 50, window=log_btn, anchor="sw")
-    play = btn("Play now", lambda: subprocess.Popen([str(PREFIX / "fable2-launch")], start_new_session=True), primary=True, w=14)
+    play = btn("Play now", lambda: subprocess.Popen([str(PREFIX / "fable2-launch")], start_new_session=True), primary=True, w=11)
     play.configure(state="disabled")
     cv.create_window(x1, by1 - 50, window=play, anchor="se")
+    un = btn("Uninstall", lambda: do_uninstall(), w=10)
+    un_win = cv.create_window((x0 + x1) // 2 - 22, by1 - 50, window=un, anchor="s", state="hidden")
     txt = tk.Text(root, state="disabled", wrap="none", font=("TkFixedFont", 8), bg="#0a0806", fg=TXT_DIM, relief="flat",
                   highlightthickness=1, highlightbackground=GOLD_DIM)
     log_win = cv.create_window(x0, py + 52, window=txt, anchor="nw", width=inner, height=by1 - 62 - (py + 52) - 36, state="hidden")
     q = queue.Queue()
-    state = {"inst": None, "running": False, "log": False}
+    state = {"inst": None, "running": False, "log": False, "info": None, "latest": None}
+
+    def refresh_ui():
+        """Install / Update / Uninstall buttons follow what is actually installed."""
+        info = read_marker()
+        state["info"] = info
+        busy = state["running"]
+        if info:
+            go.configure(text="Update", state="disabled" if busy else "normal")
+            cv.itemconfigure(un_win, state="normal")
+            un.configure(state="disabled" if busy else "normal")
+            play.configure(state="disabled" if busy else "normal")
+            src.set(str(PREFIX / "game"))
+            ent.configure(state="readonly")
+            b_iso.configure(state="disabled"); b_dir.configure(state="disabled")
+            if box is not None:
+                box.configure(state="disabled")
+            cv.itemconfigure(title_id, text="Fable II for Linux")
+            cv.itemconfigure(sub_id, text="Fable II is installed on this computer. Update keeps your saves, settings and game files.")
+            cv.itemconfigure(status, text="Installed: version %s. Checking for updates..." % info.get("version", "?"))
+            threading.Thread(target=lambda: q.put(("latest", latest_ref())), daemon=True).start()
+        else:
+            go.configure(text="Install", state="disabled" if busy else "normal")
+            cv.itemconfigure(un_win, state="hidden")
+            play.configure(state="disabled")
+            ent.configure(state="normal")
+            if src.get() == str(PREFIX / "game"):
+                src.set("")
+            b_iso.configure(state="normal"); b_dir.configure(state="normal")
+            if box is not None:
+                box.configure(state="readonly")
+            cv.itemconfigure(title_id, text="Install Fable II for Linux")
+            cv.itemconfigure(sub_id, text="Choose your own copy of Fable II: Game of the Year Edition. About 25 GB of free space is needed.")
+
+    def do_uninstall():
+        if not messagebox.askyesno("Uninstall", "Remove Fable II (Linux port) from this computer?\n\n"
+                                   "Your original ISO or game folder is NOT touched."):
+            return
+        keep = messagebox.askyesno("Uninstall", "Keep a backup copy of your save files?\n\n"
+                                   "Yes: copied to ~/Fable2-saves-backup-<date>\nNo: saves are deleted with the game.")
+        state["running"] = True
+        go.configure(state="disabled"); un.configure(state="disabled"); play.configure(state="disabled")
+        cv.itemconfigure(status, text="Uninstalling...")
+
+        def job():
+            try:
+                uninstall(lambda m: q.put(("log", m)), keep_saves=keep)
+                q.put(("uninstalled", None))
+            except Fail as e:
+                q.put(("uninstalled", str(e)))
+        threading.Thread(target=job, daemon=True).start()
 
     def toggle_log(force=None):
         state["log"] = (not state["log"]) if force is None else force
@@ -623,12 +768,31 @@ def run_gui(args):
                     cv.coords(fill, x0, py, x0 + inner * a[0], py + 10)
                     if a[1]:
                         cv.itemconfigure(status, text=a[1])
-                elif k == "done":
-                    state["running"] = False; go.configure(state="normal"); cancel.configure(state="disabled")
+                elif k == "latest":
+                    state["latest"] = a
+                    info = state["info"]
+                    if info and not state["running"] and "Checking" in cv.itemcget(status, "text"):
+                        cur = info.get("version", "?")
+                        if a and a != cur:
+                            cv.itemconfigure(status, text="Installed: %s. A new version is available: %s - press Update." % (cur, a))
+                        elif a:
+                            cv.itemconfigure(status, text="Installed: %s. You're up to date." % cur)
+                        else:
+                            cv.itemconfigure(status, text="Installed: %s. (Couldn't check for updates - offline?)" % cur)
+                elif k == "uninstalled":
+                    state["running"] = False
+                    refresh_ui()
                     if a is None:
-                        cv.itemconfigure(status, text="Installed! Start Fable II from your applications menu."); cv.coords(fill, x0, py, x1, py + 10)
-                        play.configure(state="normal")
+                        cv.itemconfigure(status, text="Uninstalled. Your original game copy was not touched."); cv.coords(fill, x0, py, x0, py + 10)
                     else:
+                        cv.itemconfigure(status, text="Uninstall stopped: " + a.splitlines()[0][:90]); messagebox.showerror("Uninstall", a)
+                elif k == "done":
+                    state["running"] = False; cancel.configure(state="disabled")
+                    if a is None:
+                        refresh_ui()
+                        cv.itemconfigure(status, text="Done! Start Fable II from your applications menu."); cv.coords(fill, x0, py, x1, py + 10)
+                    else:
+                        go.configure(state="normal"); refresh_ui()
                         cv.itemconfigure(status, text="Stopped: " + a.splitlines()[0][:90]); toggle_log(True)
                         messagebox.showerror("Installer", a)
         except queue.Empty:
@@ -646,6 +810,16 @@ def run_gui(args):
             q.put(("done", "Unexpected error: %r\nLog: %s" % (e, LOG)))
 
     def start():
+        info = state["info"]
+        if info:
+            latest = state["latest"] or latest_ref()
+            if latest and latest == info.get("version"):
+                messagebox.showinfo("Update", "You already have the newest version (%s)." % latest)
+                return
+            if not messagebox.askyesno("Update", "Update to %s?\n\nYour saves, settings and game files are kept. "
+                                       "The game is rebuilt on this computer, which takes a few minutes." % (latest or "the latest version")):
+                return
+            src.set(str(PREFIX / "game"))
         if not src.get().strip():
             choose("iso")
             if not src.get().strip():
@@ -653,7 +827,7 @@ def run_gui(args):
         inst = Installer(src.get().strip(), lambda m: q.put(("log", m)), lambda f, l: q.put(("prog", (f, l))),
                          use_gui_auth=True, keep_build=args.keep_build, dry_run=args.dry_run)
         state["inst"], state["running"] = inst, True
-        go.configure(state="disabled"); cancel.configure(state="normal"); play.configure(state="disabled")
+        go.configure(state="disabled"); un.configure(state="disabled"); cancel.configure(state="normal"); play.configure(state="disabled")
         threading.Thread(target=work, args=(inst,), daemon=True).start()
 
     def closing():
@@ -665,6 +839,7 @@ def run_gui(args):
     root.protocol("WM_DELETE_WINDOW", closing)
     if getattr(args, "autostart", False):
         root.after(500, start)
+    refresh_ui()
     pump(); root.mainloop()
     return 0
 
@@ -677,6 +852,12 @@ def main():
     ap.add_argument("--keep-build", action="store_true", help="keep the build folder (several GB) after installing")
     ap.add_argument("--dry-run", action="store_true", help="show the steps without changing anything")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--update", action="store_true", help="update an existing install (keeps saves, settings and game files)")
+    ap.add_argument("--uninstall", action="store_true", help="remove the installed port (keeps your original ISO)")
+    ap.add_argument("--delete-saves", action="store_true", help="with --uninstall --yes: do not keep a backup of your saves")
+    ap.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    ap.add_argument("--force", action="store_true", help="with --update: rebuild even if already up to date")
+    ap.add_argument("--status", action="store_true", help="show what is installed and exit")
     ap.add_argument("--autostart", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--test-iso", metavar="PATH", help="only check an image: reads it and verifies the game version")
     a = ap.parse_args()
@@ -688,11 +869,15 @@ def main():
         print("Image OK: %d entries. default.xex sha256 %s" % (n, sha))
         print("Matches the supported Fable II GOTY version." if sha == EXPECTED_XEX_SHA else "Does NOT match the supported version.")
         return 0 if sha == EXPECTED_XEX_SHA else 2
+    if a.status:
+        i = read_marker()
+        print("Not installed." if not i else "Installed: version %s (%s) in %s" % (i.get("version", "?"), i.get("commit", "?"), PREFIX))
+        return 0
     if sys.platform != "linux":
         print("This installer is for Linux."); return 1
     if os.uname().machine not in ("x86_64", "amd64"):
         print("This installer builds the x86-64 version. For ARM handhelds use the ArmadaOS package."); return 1
-    if not a.cli and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+    if not a.cli and not (a.update or a.uninstall) and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         if ensure_tk():
             return run_gui(a)
         print("(The graphical installer needs python3-tk; continuing in the terminal.)")
