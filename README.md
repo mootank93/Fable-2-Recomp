@@ -149,7 +149,11 @@ Normally the installer does this for you. To build by hand, see [LINUX.md](LINUX
 
 ## Handhelds (ARM64)
 
-An experimental ARM64 build runs on a Retroid Pocket 6 (ArmadaOS, Adreno 740 with the Turnip driver). It starts, but performance is low (roughly 8 to 13 frames per second in the guest) and there are still graphical glitches, so there is no release for it yet. This work is paused for now.
+A native ARM64 build runs on a Retroid Pocket 6 (ArmadaOS, Snapdragon 8 Gen 2, Adreno 740 with the Turnip driver). It installs, starts and plays with the built-in controller, at roughly 15 to 40 frames per second depending on the scene.
+
+Known problem: parts of the distant background can show up as solid blue or white patches on the Adreno GPU. It does not happen on desktop AMD graphics. Turning off shader waiting, saved shaders, several render formats and the Adreno compression and tiling features did not change it, so the cause is still open and there is no public handheld release yet.
+
+Running the x86 build through the FEX emulator was also tried. It reaches the splash screens and then crashes every time, because the game relies on catching memory faults in a way FEX does not reproduce, so native ARM64 is the way forward on handhelds.
 
 ## About the original project
 

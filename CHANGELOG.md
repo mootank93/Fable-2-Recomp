@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- Controllers: the game now picks up a controller that was already connected when it started. Before, the pad worked in the launch menu but not in play on some systems (seen on a handheld and inside a container).
+- README: handheld (ARM64) status updated.
+
 ## 2.3.1 - Arch fix
 - Installer: the build no longer inherits exported shell functions (such as the `module` helper). On Arch their error text made the build's configure step misread a working linker as broken.
 - Installer: a retry after a failed configure now starts from a clean build folder instead of reusing the failed result.
