@@ -14,7 +14,7 @@
 
 1. Download **`Fable2-Linux-Installer.tar.gz`** from the [latest release](../../releases/latest).
 2. Extract it and double-click **Install Fable II** (or run `./fable2-setup.py`).
-3. Pick your Fable II disc image (`.iso`) or an already-extracted game folder.
+3. Pick your Fable II disc image (`.iso`) or an already-extracted game folder. Not sure where it is? Press **Find my game...**, choose a drive, and the installer searches it for you.
 4. Wait while it checks the game, installs any missing build tools, builds and installs.
 5. Launch **Fable II** from your application menu.
 
@@ -70,6 +70,7 @@ The Linux port, installer and launch menu were developed by [mootank93](https://
 - [x] One-file installer: your ISO or folder in, installed game out
 - [x] Built-in Xbox 360 ISO reader in the installer, checked byte-for-byte against `extract-xiso`
 - [x] Window with the launch-menu artwork, native file pickers, and a terminal fallback
+- [x] **Find my game:** pick a drive and the installer searches it for your disc image or game folder, with a manual fallback
 - [x] Automatic build-tool installation for Fedora, Debian/Ubuntu and Arch families
 - [x] Update and Uninstall, with saves kept safe
 - [x] In-game launch menu with keyboard, mouse and gamepad support

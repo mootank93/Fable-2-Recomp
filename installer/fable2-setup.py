@@ -13,7 +13,7 @@ import argparse, hashlib, os, queue, re, shutil, signal, subprocess, sys, thread
 from pathlib import Path
 
 REPO_URL = os.environ.get("FABLE2_REPO", "https://github.com/mootank93/Fable-2-Recomp.git")
-REF = os.environ.get("FABLE2_REF", "v2.2.1")
+REF = os.environ.get("FABLE2_REF", "v2.3.0")
 EXPECTED_XEX_SHA = os.environ.get(
     "FABLE2_XEX_SHA256", "88c4ef2e18e65409444d1b068eff921d1f7e180a5ae64edc64ba6b0872372662")
 HOME = Path.home()
@@ -6325,6 +6325,198 @@ def find_candidates():
     return res
 
 
+# ---------------------------------------------------------------- drive search
+REAL_FS = {"ext2", "ext3", "ext4", "btrfs", "xfs", "f2fs", "jfs", "reiserfs", "ntfs", "ntfs3", "fuseblk", "vfat", "exfat",
+           "udf", "iso9660", "nfs", "nfs4", "cifs", "zfs", "bcachefs"}
+NOT_DRIVE_PREFIXES = ("/boot", "/var", "/snap", "/run/user", "/sys", "/proc", "/dev", "/run/host", "/etc", "/usr", "/tmp")
+HARD_SKIP = {"/proc", "/sys", "/dev", "/run", "/usr", "/var", "/etc", "/boot", "/snap", "/opt", "/lib", "/lib32", "/lib64",
+             "/libx32", "/bin", "/sbin", "/tmp", "/srv", "/root"}
+SKIP_NAMES = {"node_modules", "__pycache__", "lost+found", "windows", "program files", "program files (x86)", "programdata",
+              "$recycle.bin", "system volume information", "steamapps", "compatdata", "shadercache", "proton", "flatpak"}
+ISO_MIN, ISO_MAX = int(os.environ.get("FABLE2_ISO_MIN", 500 * 1000 * 1000)), 16 * 1000 * 1000 * 1000
+
+
+def _unescape_mount(s):
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
+
+
+def _disk_labels():
+    out = {}
+    d = Path("/dev/disk/by-label")
+    try:
+        for e in d.iterdir():
+            try:
+                out[str(e.resolve())] = _unescape_mount(e.name.replace("\\x20", " "))
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return out
+
+
+def list_drives(mounts_text=None):
+    """Drives the user can search: [{'label', 'roots', 'free_gb', 'total_gb'}]. The home folder always comes first."""
+    if mounts_text is None:
+        try:
+            mounts_text = Path("/proc/mounts").read_text()
+        except OSError:
+            mounts_text = ""
+    labels = _disk_labels()
+    groups = {}
+    for line in mounts_text.splitlines():
+        f = line.split()
+        if len(f) < 3 or f[2] not in REAL_FS:
+            continue
+        dev, mp = _unescape_mount(f[0]), _unescape_mount(f[1])
+        if mp != "/" and mp.startswith(NOT_DRIVE_PREFIXES):
+            continue
+        groups.setdefault(dev, []).append(mp)
+    out = [{"label": "Your home folder", "roots": [str(HOME)], "free_gb": None, "total_gb": None}]
+    for dev, mps in groups.items():
+        mps = sorted(set(mps), key=len)
+        main = "/" in mps
+        roots = ["/"] if main else mps
+        try:
+            u = shutil.disk_usage(roots[0])
+            free, total = u.free / 1e9, u.total / 1e9
+        except OSError:
+            free = total = None
+        name = labels.get(dev) or ("Main drive" if main else os.path.basename(roots[0].rstrip("/")) or dev)
+        if main and name == "Main drive":
+            name = "Main drive (everything except system folders)"
+        out.append({"label": name, "roots": roots, "free_gb": free, "total_gb": total, "dev": dev})
+    return out
+
+
+def describe_drive(d):
+    s = d["label"]
+    if d.get("total_gb"):
+        s += "   %.0f GB" % d["total_gb"] + (", %.0f GB free" % d["free_gb"] if d.get("free_gb") is not None else "")
+    return s + "   (" + ", ".join(d["roots"]) + ")"
+
+
+def scan_for_game(roots, on_progress=None, on_found=None, cancelled=lambda: False, max_depth=8, skip_mounts=(), expected=None):
+    """Looks under `roots` for a Fable II disc image (.iso) or an extracted game folder (contains default.xex).
+    Every find is checked against the supported version. Returns the list of finds:
+    {'kind': 'iso'|'folder', 'path': str, 'ok': bool, 'note': str}"""
+    expected = expected or EXPECTED_XEX_SHA
+    results, seen = [], set()
+    ndirs = 0
+    last = [0.0]
+    skip_here = {str(PREFIX), str(CACHE)} | set(skip_mounts)
+
+    def report(path):
+        if on_progress and time.time() - last[0] > 0.15:
+            last[0] = time.time()
+            on_progress(str(path), ndirs)
+
+    def add(kind, path, ok, note):
+        if path in seen:
+            return
+        seen.add(path)
+        r = {"kind": kind, "path": path, "ok": ok, "note": note}
+        results.append(r)
+        if on_found:
+            on_found(r)
+
+    def check_iso(path):
+        try:
+            if not looks_like_xiso(path):
+                return
+            sha, _ = check_iso_xex(path)
+        except (OSError, XisoError):
+            return   # not a game disc (or unreadable): nothing worth showing
+        if sha == expected:
+            add("iso", path, True, "Fable II Game of the Year (supported version)")
+        else:
+            add("iso", path, False, "An Xbox 360 game, but not the supported Fable II edition")
+
+    def check_folder(path, xex):
+        try:
+            sha = sha256_file(xex, cancelled)
+        except (OSError, Cancelled):
+            return
+        if sha == expected:
+            add("folder", path, True, "Extracted Fable II game folder (supported version)")
+        else:
+            add("folder", path, False, "Has a default.xex, but not the supported Fable II edition")
+
+    stack = [(Path(r), 0) for r in reversed(list(roots))]
+    while stack:
+        if cancelled():
+            break
+        d, depth = stack.pop()
+        sd = str(d)
+        if sd in skip_here or (sd in HARD_SKIP):
+            continue
+        ndirs += 1
+        report(d)
+        try:
+            entries = list(os.scandir(d))
+        except OSError:
+            continue
+        subdirs, has_xex = [], None
+        for e in entries:
+            try:
+                name = e.name
+                low = name.lower()
+                if e.is_dir(follow_symlinks=False):
+                    if name.startswith(".") or low in SKIP_NAMES:
+                        continue
+                    subdirs.append(e.path)
+                elif e.is_file(follow_symlinks=False):
+                    if low == "default.xex":
+                        has_xex = e.path
+                    elif low.endswith(".iso") and ISO_MIN <= e.stat().st_size <= ISO_MAX:
+                        if cancelled():
+                            break
+                        report(e.path)
+                        check_iso(e.path)
+            except OSError:
+                continue
+        if has_xex:
+            check_folder(sd, has_xex)
+            continue                      # the game folder itself: no need to look inside it
+        if depth < max_depth:
+            for sub in sorted(subdirs, reverse=True):
+                stack.append((Path(sub), depth + 1))
+    return results
+
+
+def cli_find(path=None):
+    """Terminal version of the drive search. Returns the chosen path or ''."""
+    if path:
+        roots, skip = [path], ()
+        print("Searching %s ..." % path)
+    else:
+        drives = list_drives()
+        print("Which drive should I search?")
+        for i, d in enumerate(drives, 1):
+            print("  %d) %s" % (i, describe_drive(d)))
+        ans = input("Number > ").strip()
+        if not (ans.isdigit() and 0 < int(ans) <= len(drives)):
+            return ""
+        d = drives[int(ans) - 1]
+        roots = d["roots"]
+        skip = tuple(r for x in drives if x is not d and x.get("dev") for r in x["roots"] if r != "/")
+        print("Searching %s ..." % describe_drive(d))
+
+    def prog(p, n):
+        sys.stdout.write("\r  %d folders checked  %s" % (n, (p[-60:]).ljust(60)))
+        sys.stdout.flush()
+    res = scan_for_game(roots, on_progress=prog, skip_mounts=skip)
+    sys.stdout.write("\r" + " " * 90 + "\r")
+    if not res:
+        print("Nothing found there. Try another drive, or type the path yourself.")
+        return ""
+    for i, r in enumerate(res, 1):
+        print("  %d) %s  [%s]" % (i, r["path"], r["note"]))
+    ans = input("Use which one? (number, or Enter to skip) > ").strip()
+    if ans.isdigit() and 0 < int(ans) <= len(res):
+        return res[int(ans) - 1]["path"]
+    return ""
+
+
 # ---------------------------------------------------------------- the installer
 class Installer:
     """Runs the steps. UI-agnostic: it calls log(text), progress(fraction, label) and ask_password()."""
@@ -6646,7 +6838,9 @@ def run_cli(args):
         print("Fable II installer. Where is your copy of the game?")
         for i, (k, v) in enumerate(cands, 1):
             print("  %d) %s: %s" % (i, k, v))
-        ans = input("Type a number, or the path to your .iso / game folder / disc: ").strip()
+        ans = input("Type a number, the path to your .iso / game folder / disc, or F to search a drive: ").strip()
+        if ans.lower() == "f":
+            ans = cli_find()
         source = cands[int(ans) - 1][1] if ans.isdigit() and 0 < int(ans) <= len(cands) else ans
     last = [-1]
 
@@ -6770,9 +6964,11 @@ def run_gui(args):
     ent = tk.Entry(root, textvariable=src, bg="#1d1812", fg=TXT, insertbackground=TXT, relief="flat", font=F,
                    highlightthickness=1, highlightbackground=GOLD_DIM, highlightcolor=GOLD, readonlybackground="#1d1812")
     cv.create_window(x0, y, window=ent, anchor="nw", width=inner, height=30)
-    b_iso = btn("Choose ISO file...", lambda: choose("iso"), w=18)
-    b_dir = btn("Choose folder...", lambda: choose("folder"), w=18)
+    b_iso = btn("Choose ISO...", lambda: choose("iso"), w=14)
+    b_find = btn("Find my game...", lambda: open_finder(), w=14)
+    b_dir = btn("Choose folder...", lambda: choose("folder"), w=14)
     cv.create_window(x0, y + 40, window=b_iso, anchor="nw")
+    cv.create_window((x0 + x1) // 2, y + 40, window=b_find, anchor="n")
     cv.create_window(x1, y + 40, window=b_dir, anchor="ne")
 
     cands = find_candidates()
@@ -6830,7 +7026,7 @@ def run_gui(args):
             play.configure(state="disabled" if busy else "normal")
             src.set(str(PREFIX / "game"))
             ent.configure(state="readonly")
-            b_iso.configure(state="disabled"); b_dir.configure(state="disabled")
+            b_iso.configure(state="disabled"); b_dir.configure(state="disabled"); b_find.configure(state="disabled")
             if box is not None:
                 box.configure(state="disabled")
             cv.itemconfigure(title_id, text="Fable II for Linux")
@@ -6844,7 +7040,7 @@ def run_gui(args):
             ent.configure(state="normal")
             if src.get() == str(PREFIX / "game"):
                 src.set("")
-            b_iso.configure(state="normal"); b_dir.configure(state="normal")
+            b_iso.configure(state="normal"); b_dir.configure(state="normal"); b_find.configure(state="normal")
             if box is not None:
                 box.configure(state="readonly")
             cv.itemconfigure(title_id, text="Install Fable II for Linux")
@@ -6872,6 +7068,189 @@ def run_gui(args):
         state["log"] = (not state["log"]) if force is None else force
         cv.itemconfigure(log_win, state="normal" if state["log"] else "hidden")
         log_btn.configure(text="Hide details" if state["log"] else "Show details")
+
+
+    def open_finder(auto_drive=None):
+        """Window that searches a drive for the game: pick a drive, watch it search, use what it finds."""
+        dlg = tk.Toplevel(root)
+        dlg.title("Find my Fable II")
+        dlg.configure(bg=PANEL)
+        dlg.transient(root)
+        dlg.resizable(False, False)
+        DW, DH = 600, 350
+        root.update_idletasks()
+        dlg.geometry("%dx%d+%d+%d" % (DW, DH, root.winfo_rootx() + max(0, (W - DW) // 2), root.winfo_rooty() + max(0, (H - DH) // 2)))
+        try:
+            dlg.grab_set()
+        except tk.TclError:
+            pass
+
+        def lbl(text, **kw):
+            o = dict(bg=PANEL, fg=TXT, font=F, justify="left", anchor="w", wraplength=DW - 40)
+            o.update(kw)
+            return tk.Label(dlg, text=text, **o)
+
+        def dbtn(text, cmd, primary=False, w=16):
+            return tk.Button(dlg, text=text, command=cmd, relief="flat", bd=0, cursor="hand2", font=FB if primary else F,
+                             bg=GREEN if primary else "#1d1812", fg="#fff6d8" if primary else TXT,
+                             activebackground="#58a82a" if primary else "#2b2318", activeforeground="#ffffff",
+                             highlightthickness=2, highlightbackground=GOLD if primary else GOLD_DIM, highlightcolor=GOLD,
+                             disabledforeground="#6d675c", padx=8, pady=4, width=w)
+
+        def listbox(h):
+            return tk.Listbox(dlg, height=h, bg="#1d1812", fg=TXT, selectbackground=GREEN, selectforeground="#ffffff", relief="flat",
+                              highlightthickness=1, highlightbackground=GOLD_DIM, highlightcolor=GOLD, activestyle="none",
+                              font=F, exportselection=False)
+
+        head = lbl("Find my copy of Fable II", fg=GOLD, font=("TkDefaultFont", 14, "bold"), anchor="center", justify="center")
+        head.pack(pady=(14, 4), fill="x")
+        msg = lbl("Pick the drive where your Fable II disc image (.iso) or game folder might be. I will look through it for you.")
+        msg.pack(padx=20, fill="x")
+        drives = list_drives()
+        dl = listbox(7)
+        for d in drives:
+            dl.insert("end", describe_drive(d))
+        dl.selection_set(0)
+        dl.pack(padx=20, pady=10, fill="x")
+        results = []
+        rl = listbox(7)
+        status_l = lbl("")
+        row = tk.Frame(dlg, bg=PANEL)
+        st = {"cancel": False, "thread": None, "closed": False}
+        rq = queue.Queue()
+        b_search = dbtn("Search this drive", lambda: begin(), primary=True, w=18)
+        b_close = dbtn("Close", lambda: close(), w=10)
+        b_stop = dbtn("Stop", lambda: stop(), w=10)
+        b_use = dbtn("Use this one", lambda: use(), primary=True, w=13)
+        b_other = dbtn("Search another drive", lambda: back(), w=18)
+        b_hand = dbtn("Browse myself...", lambda: by_hand(), w=14)
+
+        def show_pick():
+            for w_ in (rl, status_l, row):
+                w_.pack_forget()
+            for w_ in (b_stop, b_use, b_other, b_hand):
+                w_.pack_forget()
+            msg.configure(text="Pick the drive where your Fable II disc image (.iso) or game folder might be. I will look through it for you.")
+            dl.pack(padx=20, pady=10, fill="x")
+            row.pack(pady=8)
+            b_search.pack(in_=row, side="left", padx=6)
+            b_close.pack(in_=row, side="left", padx=6)
+
+        def begin():
+            sel = dl.curselection()
+            if not sel:
+                return
+            d = drives[sel[0]]
+            skip = tuple(r for x in drives if x is not d and x.get("dev") for r in x["roots"] if r != "/")
+            results.clear(); rl.delete(0, "end")
+            st["cancel"] = False
+            dl.pack_forget(); row.pack_forget(); b_search.pack_forget(); b_close.pack_forget()
+            msg.configure(text="Searching %s ..." % d["label"])
+            rl.pack(padx=20, pady=(10, 4), fill="x")
+            status_l.configure(text="Starting...")
+            status_l.pack(padx=20, fill="x")
+            row.pack(pady=8)
+            for w_ in (b_use, b_other, b_hand):
+                w_.pack_forget()
+            b_stop.pack(in_=row, side="left", padx=6)
+            st["drive"] = d
+
+            def work_():
+                try:
+                    scan_for_game(d["roots"], on_progress=lambda p, n: rq.put(("p", p, n)), on_found=lambda r: rq.put(("f", r)),
+                                  cancelled=lambda: st["cancel"] or st["closed"], skip_mounts=skip)
+                except Exception as e:       # never let the search crash the installer
+                    rq.put(("e", str(e)))
+                rq.put(("done",))
+            st["thread"] = threading.Thread(target=work_, daemon=True)
+            st["thread"].start()
+            poll()
+
+        def poll():
+            if st["closed"]:
+                return
+            done = False
+            try:
+                while True:
+                    m = rq.get_nowait()
+                    if m[0] == "p":
+                        status_l.configure(text="%d folders checked.  Now in: %s" % (m[2], ("..." + m[1][-48:]) if len(m[1]) > 51 else m[1]))
+                    elif m[0] == "f":
+                        r = m[1]
+                        results.append(r)
+                        rl.insert("end", ("Fable II (supported): " if r["ok"] else "Other Xbox game: ") + r["path"])
+                        rl.itemconfigure("end", fg=GOLD if r["ok"] else TXT_DIM)
+                        if r["ok"] and not rl.curselection():
+                            rl.selection_set(rl.size() - 1)
+                        b_use.configure(state="normal" if rl.curselection() and results[rl.curselection()[0]]["ok"] else "disabled")
+                    elif m[0] == "e":
+                        status_l.configure(text="The search stopped: " + m[1])
+                    elif m[0] == "done":
+                        done = True
+            except queue.Empty:
+                pass
+            if done:
+                finish()
+            else:
+                dlg.after(120, poll)
+
+        def finish():
+            b_stop.pack_forget()
+            good = [r for r in results if r["ok"]]
+            d = st["drive"]
+            if good:
+                msg.configure(text="Found your game." if len(good) == 1 else "Found %d copies. Pick the one you want." % len(good))
+                status_l.configure(text="Select it and press Use this one.")
+                if not rl.curselection():
+                    rl.selection_set([i for i, r in enumerate(results) if r["ok"]][0])
+                b_use.configure(state="normal")
+                b_use.pack(in_=row, side="left", padx=6)
+            else:
+                others = len(results)
+                msg.configure(text="I looked through %s but could not find Fable II." % d["label"])
+                status_l.configure(text=("I did find %d other Xbox game disc(s), but not the supported Fable II edition. " % others if others else "")
+                                   + "You can search another drive, or browse for the file yourself.")
+            b_other.pack(in_=row, side="left", padx=6)
+            b_hand.pack(in_=row, side="left", padx=6)
+
+        def on_select(_e=None):
+            sel = rl.curselection()
+            if sel and sel[0] < len(results):
+                b_use.configure(state="normal" if results[sel[0]]["ok"] else "disabled")
+
+        rl.bind("<<ListboxSelect>>", on_select)
+
+        def stop():
+            st["cancel"] = True
+            b_stop.configure(state="disabled")
+
+        def use():
+            sel = rl.curselection()
+            if sel and results[sel[0]]["ok"]:
+                src.set(results[sel[0]]["path"])
+                close()
+
+        def back():
+            st["cancel"] = True
+            show_pick()
+
+        def by_hand():
+            close()
+            choose("iso")
+
+        def close():
+            st["closed"] = True
+            try:
+                dlg.grab_release()
+            except tk.TclError:
+                pass
+            dlg.destroy()
+
+        dlg.protocol("WM_DELETE_WINDOW", close)
+        show_pick()
+        if auto_drive is not None and auto_drive >= 0:       # used by the automated screenshot test
+            dl.selection_clear(0, "end"); dl.selection_set(auto_drive); begin()
+        return dlg
 
     def choose(kind):
         root.update_idletasks()
@@ -6964,6 +7343,8 @@ def run_gui(args):
     if getattr(args, "autostart", False):
         root.after(500, start)
     refresh_ui()
+    if getattr(args, "autofind", None) is not None:
+        root.after(600, lambda: open_finder(args.autofind))
     pump(); root.mainloop()
     return 0
 
@@ -6981,8 +7362,10 @@ def main():
     ap.add_argument("--delete-saves", action="store_true", help="with --uninstall --yes: do not keep a backup of your saves")
     ap.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     ap.add_argument("--force", action="store_true", help="with --update: rebuild even if already up to date")
+    ap.add_argument("--find", nargs="?", const="", metavar="FOLDER", help="search a drive or folder for your game, then install it (without FOLDER: choose a drive)")
     ap.add_argument("--status", action="store_true", help="show what is installed and exit")
     ap.add_argument("--autostart", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--autofind", type=int, default=None, help=argparse.SUPPRESS)
     ap.add_argument("--test-iso", metavar="PATH", help="only check an image: reads it and verifies the game version")
     a = ap.parse_args()
     if a.test_iso:
@@ -6993,6 +7376,15 @@ def main():
         print("Image OK: %d entries. default.xex sha256 %s" % (n, sha))
         print("Matches the supported Fable II GOTY version." if sha == EXPECTED_XEX_SHA else "Does NOT match the supported version.")
         return 0 if sha == EXPECTED_XEX_SHA else 2
+    if a.find is not None and not (a.iso or a.game):
+        found = cli_find(a.find or None)
+        if not found:
+            return 1
+        if Path(found).is_dir():
+            a.game = found
+        else:
+            a.iso = found
+        a.cli = True
     if a.status:
         i = read_marker()
         print("Not installed." if not i else "Installed: version %s (%s) in %s" % (i.get("version", "?"), i.get("commit", "?"), PREFIX))

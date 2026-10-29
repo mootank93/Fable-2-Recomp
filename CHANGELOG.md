@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.0 - Find my game
+- Installer: new **Find my game...** button. It lists your drives, searches the one you pick for a Fable II disc image (`.iso`) or extracted game folder, and checks each find against the supported version. If nothing turns up you can search another drive or browse by hand.
+- Terminal: `--find [FOLDER]`, or answer `F` at the prompt.
+
 ## 2.2.1 - Ubuntu / Debian fixes
 - Installer: the Debian/Ubuntu package list was missing `libxtst-dev`, `libx11-xcb-dev`, `libxcb1-dev` and `libegl1-mesa-dev`; the Fedora and Arch lists got the matching packages.
 - Installer: the game needs clang 19 or newer (C++23). On Ubuntu/Debian it now installs `clang-20` and `lld-20`, checks the compiler version, and restarts the build from scratch if the compiler changed. Ubuntu 24.04 is now confirmed to build and run.
