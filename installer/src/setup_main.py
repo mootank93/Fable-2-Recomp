@@ -13,7 +13,7 @@ import argparse, hashlib, os, queue, re, shutil, signal, subprocess, sys, thread
 from pathlib import Path
 
 REPO_URL = os.environ.get("FABLE2_REPO", "https://github.com/mootank93/Fable-2-Recomp.git")
-REF = os.environ.get("FABLE2_REF", "v2.3.1")
+REF = os.environ.get("FABLE2_REF", "v2.3.2")
 EXPECTED_XEX_SHA = os.environ.get(
     "FABLE2_XEX_SHA256", "88c4ef2e18e65409444d1b068eff921d1f7e180a5ae64edc64ba6b0872372662")
 HOME = Path.home()

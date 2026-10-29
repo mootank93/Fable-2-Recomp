@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.3.2 - Controller fix
 - Controllers: the game now picks up a controller that was already connected when it started. Before, the pad worked in the launch menu but not in play on some systems (seen on a handheld and inside a container).
 - README: handheld (ARM64) status updated.
 
