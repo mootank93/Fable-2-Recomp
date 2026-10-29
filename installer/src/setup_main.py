@@ -13,7 +13,7 @@ import argparse, hashlib, os, queue, re, shutil, signal, subprocess, sys, thread
 from pathlib import Path
 
 REPO_URL = os.environ.get("FABLE2_REPO", "https://github.com/mootank93/Fable-2-Recomp.git")
-REF = os.environ.get("FABLE2_REF", "v2.3.0")
+REF = os.environ.get("FABLE2_REF", "v2.3.1")
 EXPECTED_XEX_SHA = os.environ.get(
     "FABLE2_XEX_SHA256", "88c4ef2e18e65409444d1b068eff921d1f7e180a5ae64edc64ba6b0872372662")
 HOME = Path.home()
@@ -479,7 +479,10 @@ class Installer:
         self.log("$ " + (cmd if shell else " ".join(map(str, cmd))))
         if self.dry:
             return
-        e = dict(os.environ, **(env or {}))
+        # Exported shell functions (BASH_FUNC_*, e.g. the `module` helper) make some shells print "syntax error" on every
+        # command, which the build's own configure checks misread as a failure. The build does not need them.
+        e = {k: v for k, v in os.environ.items() if not k.startswith("BASH_FUNC_")}
+        e.update(env or {})
         self.proc = subprocess.Popen(cmd, cwd=cwd, env=e, shell=shell, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
         stop = threading.Event()
@@ -634,6 +637,10 @@ class Installer:
                 pass
             self.prog(0.0 + min(0.95, max(0, n) / 1800.0), "Building the game: %d steps done, %d min" % (max(n, 0), (time.time() - t0) // 60))
         cache = B / "CMakeCache.txt"
+        if cache.is_file() and not (B / "build.ninja").is_file() and not self.dry:
+            self.log("An earlier configure did not finish; starting the build from scratch.")
+            shutil.rmtree(src / "out", ignore_errors=True)
+            shutil.rmtree(src / "thirdparty/rexglue-sdk/out", ignore_errors=True)
         if cache.is_file() and not self.dry:
             want = "clang++-20" if shutil.which("clang++-20") else "clang++"
             try:

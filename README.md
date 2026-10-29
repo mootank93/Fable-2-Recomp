@@ -29,7 +29,7 @@ Requirements: a 64-bit Linux PC with a **Vulkan-capable GPU** (the game uses Vul
 
 **Supported game:** Fable II Game of the Year Edition. The installer accepts the `default.xex` with SHA-256 `88c4ef2e18e65409444d1b068eff921d1f7e180a5ae64edc64ba6b0872372662`. Other revisions are rejected.
 
-**Tested on:** Ubuntu 24.04 (builds and runs, tested in a container). Nobara / Fedora 44 (KDE Plasma, Wayland) with an AMD Ryzen 9 7950X and Radeon RX 7900 XT, running at 4K with maximum settings. A PS4 controller (wired) is the pad used for testing. The package lists for Debian/Ubuntu and Arch are included but not yet tested. Reports from other distributions are very welcome.
+**Tested on:** Ubuntu 24.04 and Arch Linux (both build and run, tested in containers). Nobara / Fedora 44 (KDE Plasma, Wayland) with an AMD Ryzen 9 7950X and Radeon RX 7900 XT, running at 4K with maximum settings. A PS4 controller (wired) is the pad used for testing. Reports from other distributions are very welcome.
 
 ### Packages the build needs
 

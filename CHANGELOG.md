@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.1 - Arch fix
+- Installer: the build no longer inherits exported shell functions (such as the `module` helper). On Arch their error text made the build's configure step misread a working linker as broken.
+- Installer: a retry after a failed configure now starts from a clean build folder instead of reusing the failed result.
+
 ## 2.3.0 - Find my game
 - Installer: new **Find my game...** button. It lists your drives, searches the one you pick for a Fable II disc image (`.iso`) or extracted game folder, and checks each find against the supported version. If nothing turns up you can search another drive or browse by hand.
 - Terminal: `--find [FOLDER]`, or answer `F` at the prompt.
