@@ -33,6 +33,7 @@
 #include "fable2_patches.h"
 #include "fable2_launcher_menu.h"
 #include "fable2_fps_counter.h"
+#include "fable2_debug.h"
 #include "fable2_quit_combo.h"
 // #include "fable2_deadbeef_overlay.h"
 // 30fps-cap instrumentation (writes fps_probe.log next to the exe). Disabled
@@ -584,6 +585,11 @@ class Fable2App : public rex::ReXApp {
     fps_counter_.reset(); }
 #endif
 
+  // Optional menu font (launcher_font.ttf next to the exe).
+  void OnConfigureFonts(ImFontAtlas* atlas) override {
+    fable2::launcher::LoadMenuFont(atlas, fable2::launcher_menu::ExeDir());
+  }
+
   std::optional<rex::PathConfig> OnFinalizePaths(
       const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
     if (!quit_combo_ && imgui_drawer()) {
@@ -597,25 +603,36 @@ class Fable2App : public rex::ReXApp {
       return defaults;
     }
     fable2::launcher::SetImageSource(immediate_drawer(), fable2::launcher_menu::ExeDir());
+    // The menu is shown in a normal window; the Fullscreen choice is applied when the game starts.
+    const bool menu_windowed =
+        fable2::launcher_menu::detail::Norm(rex::cvar::GetFlagByName("fullscreen")) == "true";
+    if (menu_windowed) window()->SetFullscreen(false);
     new fable2::launcher::LauncherDialog(
         imgui_drawer(), "Fable II", fable2::launcher_menu::BuildItems(defaults.user_data_root),
-        [this, defaults, resume](bool start, const std::vector<fable2::launcher::Item>& items) {
+        [this, defaults, resume, menu_windowed](bool start, const std::vector<fable2::launcher::Item>& items) {
           // The dialog is mid-draw; continue from a clean UI-thread turn.
-          app_context().CallInUIThreadDeferred([this, defaults, resume, start, items]() {
+          app_context().CallInUIThreadDeferred([this, defaults, resume, start, items, menu_windowed]() {
             if (!start) {
               REXSYS_INFO("[launcher] quit requested from the launch menu");
               app_context().QuitFromUIThread();
               return;
             }
+            // If the menu was shown windowed, the window is windowed now whatever the setting says.
             const bool was_fullscreen =
+                !menu_windowed &&
                 fable2::launcher_menu::detail::Norm(rex::cvar::GetFlagByName("fullscreen")) ==
-                "true";
+                    "true";
             fable2::launcher_menu::Apply(items);
             const bool want_fullscreen =
                 fable2::launcher_menu::detail::Norm(rex::cvar::GetFlagByName("fullscreen")) ==
                 "true";
             if (want_fullscreen != was_fullscreen) window()->SetFullscreen(want_fullscreen);
-            if (const int m = fable2::launcher_menu::FpsMode(); m > 0) {
+            if (fable2::debug::Enabled()) {
+              fps_counter_ = std::make_unique<fable2::debug::DebugDialog>(
+                  imgui_drawer(), []() -> double {
+                    return double(rex::perf::GetSnapshotCounter(rex::perf::CounterId::kFrameTimeUs));
+                  });
+            } else if (const int m = fable2::launcher_menu::FpsMode(); m > 0) {
               fps_counter_ = std::make_unique<fable2::FpsCounterDialog>(
                   imgui_drawer(), m == 2, []() -> double {
                     return double(rex::perf::GetSnapshotCounter(rex::perf::CounterId::kFrameTimeUs));

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.0 - Two-page menu and Debug mode
+- Launch menu: now two pages, **Game** and **Extras and Debug**. Switch with LB / RB, Tab or PageUp / PageDown, or click a tab. Frame rate, VSync and the FPS counter are on page 1, where you change them most.
+- Launch menu: new **Debug mode** row. It shows a live panel in the corner (game and display frame rate, frame-time graph, CPU, memory, threads) and turns on extra graphics logging (GPU debug markers, and the Vulkan validation layer when it is installed). Turning it on switches the FPS counter off, since the panel already shows the frame rate.
+- Launch menu: new **Export debug report** row (needs Debug mode on). It writes one text file (system, graphics driver, your menu choices, a summary and the end of the last game log) into the save folder, so a bug report is a single file. Your home folder is hidden as `~`.
+- Launch menu: now opens in a normal window instead of full screen. Your Full screen choice is applied when you press Start Game.
+- Launch menu: rows that can't be used right now are shown greyed out, with a note on why.
+- Launch menu: optional font. Put `launcher_font.ttf` next to the game program and the menu uses it.
+
 ## 2.3.2 - Controller fix
 - Controllers: the game now picks up a controller that was already connected when it started. Before, the pad worked in the launch menu but not in play on some systems (seen on a handheld and inside a container).
 - README: handheld (ARM64) status updated.

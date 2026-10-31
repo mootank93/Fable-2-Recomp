@@ -102,23 +102,32 @@ The Linux port, installer and launch menu were developed by [mootank93](https://
 
 When the game starts on Linux you get the launch menu first, where you choose your settings before the game boots. It is built to work with a gamepad, keyboard or mouse.
 
-The menu has these settings:
+The menu has two pages. Switch between them with LB / RB on a gamepad, Tab or PageUp / PageDown on a keyboard, or by clicking the tabs. Start Game and Quit stay available on both.
+
+**Page 1 - Game**
 
 | Setting | What it does |
 |---|---|
 | Preset | Quick starting points for the settings below |
 | Render scale | Internal rendering resolution |
 | Anisotropic filtering | Texture sharpness at an angle |
-| Frame rate | Frame rate limit |
 | Motion blur | On or off |
+| Full screen | Windowed or full screen |
+| Frame rate | Frame rate limit |
+| VSync | On or off |
+| FPS counter | Show the frame rate on screen (greyed out while Debug mode is on, because the debug panel already shows it) |
+
+**Page 2 - Extras and Debug**
+
+| Setting | What it does |
+|---|---|
 | Website bonus items | Unlock the Website bonus items |
 | Collector's Edition items | Unlock the Collector's Edition items |
-| FPS counter | Show the frame rate on screen |
-| Full screen | Windowed or full screen |
-| VSync | On or off |
 | Save folder | Choose where your saves are kept |
 | Export saves | Save a backup of your saves |
 | Import saves | Restore saves from a backup (your current saves are backed up first) |
+| Debug mode | Live panel with frame-time graph, CPU, memory and threads, plus extra graphics logging, for finding problems |
+| Export debug report | Needs Debug mode on. Writes one text file (system, graphics driver, settings, end of the last game log) to attach to a bug report; your home folder is hidden as `~` |
 
 - **Move:** D-pad / left stick, arrow keys, or the mouse
 - **Choose:** A (or Enter); **Back:** B (or Escape / Backspace)
@@ -126,6 +135,8 @@ The menu has these settings:
 - **Folders and files:** Save folder and Import saves use a built-in browser you can drive with the pad, no keyboard needed
 
 The artwork is AI-generated fan art, made for this project.
+
+**Optional menu font:** put a TrueType font named `launcher_font.ttf` next to the `fable_2` program (installed copies: `~/.local/share/fable2-port/app/`) and the menu uses it. Without it the menu keeps its built-in font. No font is included in this project.
 
 ## Known issues
 

@@ -26,6 +26,7 @@
 #endif
 
 #include "fable2_config.h"
+#include "fable2_debug.h"
 #include "fable2_launcher_dialog.h"
 #include "fable2_saves.h"
 
@@ -175,6 +176,24 @@ inline std::vector<launcher::Item> BuildItems(const std::filesystem::path& save_
             "Shows the game's frame rate (and the display's) in the corner of the screen. Detailed adds the frame time in milliseconds.",
             {{"Off", "off"}, {"On", "on"}, {"Detailed", "detailed"}}, 0};
     it.apply = [](const std::string& v) { g_fps_mode = (v == "on") ? 1 : (v == "detailed") ? 2 : 0; };
+    it.enabled = [](const std::vector<Item>& v) {
+      for (const auto& x : v)
+        if (x.key == "debug_mode") return x.choices[x.selected].value != "on";
+      return true;
+    };
+    it.disabled_help = "Debug mode is on and its panel already shows the frame rate. Turn Debug mode off (Extras and Debug page) to use this.";
+    items.push_back(std::move(it));
+  }
+  {
+    Item it{"debug_mode", "Debug mode",
+            "For finding problems: shows a live panel (frame-time graph, CPU, memory, threads) and turns on extra graphics logging. Costs a little speed. Use \"Export debug report\" below to collect a file for a bug report.",
+            {{"Off", "off"}, {"On", "on"}}, 0};
+    it.apply = [](const std::string& v) { if (v == "on") fable2::debug::Activate(); };
+    // The debug panel already shows the frame rate, so turning Debug mode on turns the FPS counter off.
+    it.on_change = [](std::vector<Item>& v) {
+      auto* d = Find(v, "debug_mode");
+      if (d && d->choices[d->selected].value == "on") Pick(v, "fps_counter", "off");
+    };
     items.push_back(std::move(it));
   }
   items.push_back({"fullscreen", "Fullscreen", "Play fullscreen or in a window.",
@@ -198,9 +217,9 @@ inline std::vector<launcher::Item> BuildItems(const std::filesystem::path& save_
       r.on_pick = [dir](const std::filesystem::path& p) { *dir = p.string(); return "Save folder set to " + p.string(); };
       return r;
     };
-    Item ex{"", "Export saves", "Zips your saves into the save folder above, ready to copy to another device.",
+    Item ex{"export_saves", "Export saves", "Zips your saves into the save folder above, ready to copy to another device.",
             {}, 0, [save_root, dir] { return saves::DoExport(save_root, *dir); }};
-    Item im{"", "Import saves",
+    Item im{"import_saves", "Import saves",
             "Pick a saves .zip to load (your current saves are backed up first). Browse to a USB stick or another folder if needed.",
             {}, 0};
     im.browse = [save_root, dir]() {
@@ -212,9 +231,43 @@ inline std::vector<launcher::Item> BuildItems(const std::filesystem::path& save_
       r.on_pick = [save_root, dir](const std::filesystem::path& p) { return saves::DoImportFile(save_root, p, *dir); };
       return r;
     };
+    Item dr{"export_debug_report", "Export debug report",
+            "Writes one text file (system, graphics driver, settings, and the end of your last game log) into the save folder above. Your home folder is hidden as ~. Read it before sharing.",
+            {}, 0, [dir] { return fable2::debug::ExportReport(saves::TransferDir(*dir)); }};
+    dr.enabled = [](const std::vector<Item>& v) {
+      for (const auto& x : v)
+        if (x.key == "debug_mode") return x.choices[x.selected].value == "on";
+      return false;
+    };
+    dr.disabled_help = "Turn Debug mode on (the row above) to use this.";
     items.push_back(std::move(sd));
     items.push_back(std::move(ex));
     items.push_back(std::move(im));
+    items.push_back(std::move(dr));
+  }
+
+  // Layout: two pages. Page 0 = things you change often; page 1 = bonus items, saves, debug.
+  {
+    struct Lay { const char* key; int page; const char* section; };
+    static const Lay layout[] = {
+        {"preset", 0, "Picture"}, {"resolution_scale", 0, ""}, {"anisotropic_override", 0, ""},
+        {"motion_blur", 0, ""},   {"fullscreen", 0, ""},
+        {"frame_rate", 0, "Performance"}, {"vsync", 0, ""}, {"fps_counter", 0, ""},
+        {"unlock_website", 1, "Bonus items"}, {"unlock_ce", 1, ""},
+        {"saves_dir", 1, "Saves"}, {"export_saves", 1, ""}, {"import_saves", 1, ""},
+        {"debug_mode", 1, "Debug"}, {"export_debug_report", 1, ""}};
+    constexpr int kN = int(sizeof(layout) / sizeof(layout[0]));
+    auto rank = [&](const Item& it) {
+      for (int i = 0; i < kN; ++i)
+        if (it.key == layout[i].key) return i;
+      return kN;
+    };
+    for (auto& it : items) {
+      const int r = rank(it);
+      if (r < kN) { it.page = layout[r].page; it.section = layout[r].section; }
+    }
+    std::stable_sort(items.begin(), items.end(),
+                     [&](const Item& a, const Item& b) { return rank(a) < rank(b); });
   }
 
   // Initial selections: saved choice, else current state.
@@ -235,6 +288,8 @@ inline std::vector<launcher::Item> BuildItems(const std::filesystem::path& save_
     } else if (it.key == "preset") {
       want = "custom";
     } else if (it.key == "fps_counter") {
+      want = "off";
+    } else if (it.key == "debug_mode") {
       want = "off";
     } else {
       want = cur(it.key.c_str());

@@ -153,7 +153,7 @@ ls "$PREFIX"/app/librexgpu-xenos.so >/dev/null 2>&1 || die "librexgpu-xenos.so i
 if [ -f "$PAYLOAD/fable2_config.toml" ] && { [ ! -f "$PREFIX/app/fable2_config.toml" ] || [ "$UPGRADE" = 0 ]; }; then
   cp -a "$PAYLOAD/fable2_config.toml" "$PREFIX/app/fable2_config.toml"
 fi
-for f in launcher_bg.png launcher_bg.layout launcher_logo.png; do
+for f in launcher_bg.png launcher_bg.layout launcher_logo.png launcher_font.ttf; do
   [ -f "$PAYLOAD/$f" ] && cp -a "$PAYLOAD/$f" "$PREFIX/app/$f"
 done
 cp -a "$HERE/fable2-launch" "$PREFIX/fable2-launch"; chmod +x "$PREFIX/fable2-launch"

@@ -63,6 +63,14 @@ struct Item {
   // Optional: called after the player changes this row (used by presets to move
   // other rows).
   std::function<void(std::vector<Item>&)> on_change;
+  // Menu page this row lives on (0 = first). Pages are switched with LB/RB, Tab or PageUp/PageDown.
+  int page = 0;
+  // Optional heading drawn above this row (rows after it share the heading until the next one).
+  std::string section;
+  // Optional: when it returns false the row is shown greyed out and can't be changed or run.
+  std::function<bool(const std::vector<Item>&)> enabled;
+  // Help text shown instead of `help` while the row is greyed out.
+  std::string disabled_help;
 };
 
 namespace detail {
@@ -117,6 +125,39 @@ inline bool LoadLayout(float out[4]) {
   return true;
 }
 }  // namespace detail
+
+// Optional menu font: launcher_font.ttf next to the exe. Loaded into the ImGui atlas at startup
+// (call from ReXApp::OnConfigureFonts). Without the file the menu keeps the built-in font.
+namespace detail {
+inline ImFont*& MenuFont() {
+  static ImFont* f = nullptr;
+  return f;
+}
+constexpr float kMenuFontPx = 40.0f;  // size the font is rasterised at; the menu scales it down
+}  // namespace detail
+
+inline void LoadMenuFont(ImFontAtlas* atlas, const std::filesystem::path& dir) {
+  if (!atlas || dir.empty()) return;
+  std::error_code ec;
+  const std::filesystem::path p = dir / "launcher_font.ttf";
+  if (!std::filesystem::is_regular_file(p, ec)) return;
+  const auto sz = std::filesystem::file_size(p, ec);
+  if (ec || sz < 1024 || sz > (16u << 20)) return;
+  {  // must look like a TrueType / OpenType file
+    std::ifstream f(p, std::ios::binary);
+    char m[4] = {};
+    if (!f.read(m, 4)) return;
+    const bool ok = (m[0] == 0 && m[1] == 1 && m[2] == 0 && m[3] == 0) || std::string(m, 4) == "OTTO" ||
+                    std::string(m, 4) == "true";
+    if (!ok) return;
+  }
+  static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2018, 0x201D, 0};
+  ImFontConfig cfg;
+  cfg.OversampleH = 2;
+  cfg.OversampleV = 2;
+  cfg.GlyphRanges = ranges;
+  detail::MenuFont() = atlas->AddFontFromFileTTF(p.string().c_str(), detail::kMenuFontPx, &cfg);
+}
 
 // Call once before showing the menu: where to look for launcher_bg.png / launcher_logo.png.
 inline void SetImageSource(rex::ui::ImmediateDrawer* drawer, std::filesystem::path dir) {
@@ -184,19 +225,26 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
       HandleBrowser(r);
     }
 
-    const int rows = int(items_.size()) + 2;  // + Start, Quit
-    const int kStart = int(items_.size());
+    if (pending_page_ >= 0) { SetPage(pending_page_); pending_page_ = -1; }
+    if (a.pg_prev) SetPage(page_ - 1);
+    if (a.pg_next) SetPage(page_ + 1);
+    std::vector<int> vis;  // items shown on this page
+    for (int i = 0; i < int(items_.size()); ++i)
+      if (items_[i].page == page_) vis.push_back(i);
+    const int rows = int(vis.size()) + 2;  // + Start, Quit
+    const int kStart = int(vis.size());
     if (a.up) row_ = (row_ + rows - 1) % rows;
     if (a.down) row_ = (row_ + 1) % rows;
-    if (row_ < kStart) {
-      auto& it = items_[row_];
+    if (row_ < kStart && IsEnabled(vis[row_])) {
+      const int ii = vis[row_];
+      auto& it = items_[ii];
       const int n = int(it.choices.size());
       if (it.action && a.accept) status_ = it.action();
       if (it.browse && a.accept) br_ = std::make_unique<Browser>(it.browse());
       if (it.text && !it.browse && a.accept) { editing_ = true; focus_edit_ = true; }
-      if (n > 0 && a.left) { it.selected = (it.selected + n - 1) % n; Changed(row_); }
-      if (n > 0 && (a.right || a.accept)) { it.selected = (it.selected + 1) % n; Changed(row_); }
-    } else if (a.accept) {
+      if (n > 0 && a.left) { it.selected = (it.selected + n - 1) % n; Changed(ii); }
+      if (n > 0 && (a.right || a.accept)) { it.selected = (it.selected + 1) % n; Changed(ii); }
+    } else if (row_ >= kStart && a.accept) {
       Finish(row_ == kStart);
       return;
     }
@@ -276,7 +324,18 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav |
                      (has_layout_ ? 0 : ImGuiWindowFlags_AlwaysAutoResize));
-    ImGui::SetWindowFontScale(1.7f * s);
+    // With the optional menu font, the menu text is drawn with it. The font is rasterised at
+    // kMenuFontPx and scaled down; fk keeps the on-screen size close to the built-in font's.
+    ImFont* menu_font = detail::MenuFont();
+    const float fk = menu_font ? (10.0f / detail::kMenuFontPx) * 1.25f : 1.0f;
+    if (menu_font) {
+#if defined(IMGUI_VERSION_NUM) && IMGUI_VERSION_NUM >= 19200
+      ImGui::PushFont(menu_font, detail::kMenuFontPx);
+#else
+      ImGui::PushFont(menu_font);
+#endif
+    }
+    ImGui::SetWindowFontScale(1.7f * s * fk);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 wp = ImGui::GetWindowPos();
@@ -331,9 +390,65 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     const float inner_w = ImGui::GetContentRegionAvail().x;
     const float row_h = ImGui::GetTextLineHeight() * 1.55f;
 
-    for (int i = 0; i < int(items_.size()); ++i) {
+    // ---- Page tabs (only when there is more than one page): LB [ GAME | EXTRAS AND DEBUG ] RB
+    if (PageCount() > 1) {
+      const int np = PageCount();
+      const float th = row_h * 0.95f;
+      const float kw = ImGui::CalcTextSize("LB").x + 18 * s;
+      const ImVec2 sp = ImGui::GetCursorScreenPos();
+      const float tabs_w = inner_w - 2 * kw - 12 * s;
+      const float tw = tabs_w / float(np);
+      const float fsz = base * 0.62f;
+      auto key_hint = [&](const char* t, float x) {
+        const ImVec2 ks = font->CalcTextSizeA(fsz, 1e9f, 0.0f, t);
+        const ImVec2 a0(x + (kw - ks.x) * 0.5f - 6 * s, sp.y + (th - ks.y) * 0.5f - 2 * s);
+        dl->AddRect(a0, ImVec2(a0.x + ks.x + 12 * s, a0.y + ks.y + 4 * s), gold_dim, 3 * s, 0, 1.2f * s);
+        dl->AddText(font, fsz, ImVec2(a0.x + 6 * s, a0.y + 2 * s), gold, t);
+      };
+      key_hint("LB", sp.x);
+      key_hint("RB", sp.x + inner_w - kw);
+      for (int t = 0; t < np; ++t) {
+        const float x0 = sp.x + kw + 6 * s + tw * float(t);
+        const bool on = (t == page_);
+        if (on) dl->AddRectFilled(ImVec2(x0, sp.y), ImVec2(x0 + tw, sp.y + th), C(0.93f, 0.78f, 0.42f, 0.12f));
+        dl->AddLine(ImVec2(x0, sp.y + th), ImVec2(x0 + tw, sp.y + th), on ? gold : C(0.62f, 0.50f, 0.27f, 0.35f), (on ? 2.5f : 1.0f) * s);
+        const char* nm = PageName(t);
+        float total = 0;
+        const float gap = fsz * 0.18f;
+        for (const char* c = nm; *c; ++c) total += font->CalcTextSizeA(fsz, 1e9f, 0, c, c + 1).x + gap;
+        total -= gap;
+        float x = x0 + (tw - total) * 0.5f;
+        const float y = sp.y + (th - fsz) * 0.5f;
+        for (const char* c = nm; *c; ++c) {
+          dl->AddText(font, fsz, ImVec2(x, y), on ? C(1.0f, 0.93f, 0.70f) : C(0.62f, 0.58f, 0.52f), c, c + 1);
+          x += font->CalcTextSizeA(fsz, 1e9f, 0, c, c + 1).x + gap;
+        }
+        ImGui::SetCursorScreenPos(ImVec2(x0, sp.y));
+        ImGui::PushID(2000 + t);
+        if (ImGui::InvisibleButton("##tab", ImVec2(tw, th))) pending_page_ = t;
+        ImGui::PopID();
+      }
+      ImGui::SetCursorScreenPos(ImVec2(sp.x, sp.y));
+      ImGui::Dummy(ImVec2(inner_w, th + 4 * s));  // grows the window; the tab buttons above are placed by position
+    }
+
+    const ImVec4 dis(0.42f, 0.39f, 0.35f, 1.0f);
+    for (int k = 0; k < kStart; ++k) {
+      const int i = vis[k];
+      const bool en = IsEnabled(i);
+      if (!items_[i].section.empty()) {
+        const float fsz = base * 0.62f, gap = fsz * 0.22f;
+        const ImVec2 hp = ImGui::GetCursorScreenPos();
+        float x = hp.x + 20 * s;
+        for (char ch : items_[i].section) {
+          const char up = char(std::toupper((unsigned char)ch));
+          dl->AddText(font, fsz, ImVec2(x, hp.y + 4 * s), gold_dim, &up, &up + 1);
+          x += font->CalcTextSizeA(fsz, 1e9f, 0, &up, &up + 1).x + gap;
+        }
+        ImGui::Dummy(ImVec2(0, fsz + 10 * s));
+      }
       ImGui::PushID(i);
-      const bool sel = (row_ == i);
+      const bool sel = (row_ == k);
       const ImVec2 p = ImGui::GetCursorPos();
       const ImVec2 sp = ImGui::GetCursorScreenPos();
       if (sel) {
@@ -352,24 +467,24 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
                     ImVec2(sp.x + inner_w - 10 * s, sp.y + row_h + 1 * s), C(0.62f, 0.50f, 0.27f, 0.30f), 1.0f);
       }
       if (ImGui::Selectable("##row", sel, 0, ImVec2(inner_w, row_h))) {
-        row_ = i;
-        if (items_[i].action) status_ = items_[i].action();
-        if (items_[i].browse) br_ = std::make_unique<Browser>(items_[i].browse());
-        if (items_[i].text && !items_[i].browse) { editing_ = true; focus_edit_ = true; }
+        row_ = k;
+        if (en && items_[i].action) status_ = items_[i].action();
+        if (en && items_[i].browse) br_ = std::make_unique<Browser>(items_[i].browse());
+        if (en && items_[i].text && !items_[i].browse) { editing_ = true; focus_edit_ = true; }
         const int n = int(items_[i].choices.size());
         // Click the right half to change the value forward, left half selects.
-        if (n > 0 && ImGui::GetMousePos().x > ImGui::GetWindowPos().x + panel_w * 0.5f) {
+        if (en && n > 0 && ImGui::GetMousePos().x > ImGui::GetWindowPos().x + panel_w * 0.5f) {
           items_[i].selected = (items_[i].selected + 1) % n;
           Changed(i);
         }
       }
       if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-        row_ = i;
+        row_ = k;
         const int n = int(items_[i].choices.size());
-        if (n > 0) { items_[i].selected = (items_[i].selected + n - 1) % n; Changed(i); }
+        if (en && n > 0) { items_[i].selected = (items_[i].selected + n - 1) % n; Changed(i); }
       }
       ImGui::SetCursorPos(ImVec2(p.x + 20 * s, p.y + (row_h - ImGui::GetTextLineHeight()) * 0.5f));
-      ImGui::TextColored(sel ? txt_sel : txt, "%s", items_[i].label.c_str());
+      ImGui::TextColored(!en ? dis : sel ? txt_sel : txt, "%s", items_[i].label.c_str());
       if (items_[i].text && !items_[i].browse && editing_ && sel) {
         // Inline editor replaces the value text while editing.
         ImGui::SetCursorPos(ImVec2(p.x + inner_w * 0.32f, p.y));
@@ -393,13 +508,13 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
                       : items_[i].choices.empty()
                           ? std::string("-")
                           : items_[i].choices[items_[i].selected].label;
-      if (sel && !items_[i].action && !items_[i].text && !items_[i].browse) v = "<  " + v + "  >";
+      if (sel && en && !items_[i].action && !items_[i].text && !items_[i].browse) v = "<  " + v + "  >";
       const float max_vw = inner_w * 0.62f;
       while (v.size() > 8 && ImGui::CalcTextSize(v.c_str()).x > max_vw) v.erase(v.begin(), v.begin() + 4), v.replace(0, 3, "...");
       const float vw = ImGui::CalcTextSize(v.c_str()).x;
       ImGui::SetCursorPos(ImVec2(p.x + inner_w - vw - 20 * s,
                                  p.y + (row_h - ImGui::GetTextLineHeight()) * 0.5f));
-      ImGui::TextColored(sel ? txt_sel : txt, "%s", v.c_str());
+      ImGui::TextColored(!en ? dis : sel ? txt_sel : txt, "%s", v.c_str());
       ImGui::SetCursorPos(ImVec2(p.x, p.y + row_h + 2 * s));
       ImGui::PopID();
     }
@@ -440,10 +555,14 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
 
     if (!finished_) {
       ImGui::Dummy(ImVec2(0, 4 * s));
-      ImGui::SetWindowFontScale(1.4f * s);
-      std::string help = (row_ < int(items_.size())) ? items_[row_].help
-                                                     : (row_ == kStart ? "Launch Fable II with these settings."
-                                                                       : "Close without starting.");
+      ImGui::SetWindowFontScale(1.4f * s * fk);
+      std::string help;
+      if (row_ < kStart) {
+        const auto& hi = items_[vis[row_]];
+        help = (!IsEnabled(vis[row_]) && !hi.disabled_help.empty()) ? hi.disabled_help : hi.help;
+      } else {
+        help = (row_ == kStart) ? "Launch Fable II with these settings." : "Close without starting.";
+      }
       ImGui::PushTextWrapPos(ImGui::GetWindowWidth() - 40 * s);
       if (!status_.empty()) {
         ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.55f, 1.0f), "%s", status_.c_str());
@@ -485,6 +604,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
       wd->AddRectFilled(ImVec2(0, 0), io.DisplaySize, C(0, 0, 0, 0.6f));
       wd->PopClipRect();
     }
+    if (menu_font) ImGui::PopFont();
     ImGui::End();
     ImGui::PopStyleColor(4);
     ImGui::PopStyleVar(3);
@@ -506,6 +626,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
  private:
   struct Actions {
     bool up = false, down = false, left = false, right = false, accept = false, back = false;
+    bool pg_prev = false, pg_next = false;
   };
 
   Actions ReadKeyboard() {
@@ -518,6 +639,9 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
                ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false) ||
                ImGui::IsKeyPressed(ImGuiKey_Space, false);
     a.back = ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false);
+    const bool shift = ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift);
+    a.pg_prev = ImGui::IsKeyPressed(ImGuiKey_PageUp, false) || (shift && ImGui::IsKeyPressed(ImGuiKey_Tab, false));
+    a.pg_next = ImGui::IsKeyPressed(ImGuiKey_PageDown, false) || (!shift && ImGui::IsKeyPressed(ImGuiKey_Tab, false));
     return a;
   }
 
@@ -572,6 +696,11 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     const bool bk = btn(SDL_GAMEPAD_BUTTON_EAST);
     if (bk && !back_held_) a.back = true;
     back_held_ = bk;
+    const bool lb = btn(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER), rb = btn(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+    if (lb && !lb_held_) a.pg_prev = true;
+    if (rb && !rb_held_) a.pg_next = true;
+    lb_held_ = lb;
+    rb_held_ = rb;
   }
 #else
   void MergePad(Actions&) {}
@@ -599,6 +728,28 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     }
   }
 
+  bool IsEnabled(int i) const { return !items_[i].enabled || items_[i].enabled(items_); }
+
+  int PageCount() const {
+    int n = 1;
+    for (const auto& it : items_) n = std::max(n, it.page + 1);
+    return n;
+  }
+
+  static const char* PageName(int p) {
+    static const char* names[] = {"GAME", "EXTRAS AND DEBUG"};
+    return (p >= 0 && p < 2) ? names[p] : "MORE";
+  }
+
+  void SetPage(int p) {
+    const int n = PageCount();
+    p = ((p % n) + n) % n;
+    if (p == page_) return;
+    page_ = p;
+    row_ = 0;
+    status_.clear();
+  }
+
   void Finish(bool start) {
     if (finished_) return;
     finished_ = true;
@@ -609,7 +760,9 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   std::string title_;
   std::vector<Item> items_;
   DoneFn done_;
-  int row_ = 0;
+  int row_ = 0;   // index into the rows visible on the current page, then Start, Quit
+  int page_ = 0;
+  int pending_page_ = -1;  // set by a click on a tab, applied at the start of the next frame
   std::string status_;
   bool editing_ = false;
   std::unique_ptr<Browser> br_;
@@ -628,6 +781,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   bool held_[4] = {false, false, false, false};
   double hold_t_[4] = {0, 0, 0, 0};
   bool back_held_ = true;
+  bool lb_held_ = true, rb_held_ = true;
   bool ok_held_ = true;  // ignore a button that's already down when the menu opens
 #endif
 };
